@@ -1,0 +1,137 @@
+---
+output:
+  pdf_document:
+    latex_engine: xelatex
+    toc: false
+mainfont: "Latin Modern Roman"
+sansfont: "Latin Modern Sans"
+header-includes:
+  - \usepackage{array,booktabs,longtable,calc}
+  - \usepackage{tocloft}
+  - \usepackage{fancyhdr}
+  - \usepackage{lastpage}
+  - \usepackage{graphicx}
+  - \usepackage{xcolor}
+  - \usepackage{tikz}
+  - \usepackage{pgfplots}
+  - \pgfplotsset{compat=1.17}
+  - \usetikzlibrary{arrows.meta}
+  - \usepackage{float}
+  - \usepackage{caption}
+  - \IfFontExistsTF{Calibri}{\newfontfamily\calibrifont{Calibri}}{\IfFontExistsTF{Carlito}{\newfontfamily\calibrifont{Carlito}}{\let\calibrifont\sffamily}}
+  - \setcounter{secnumdepth}{2}
+  - \setcounter{tocdepth}{2}
+  - \renewcommand{\thesection}{\Roman{section}}
+  - \makeatletter\renewcommand{\thesubsection}{\thesection.\two@digits{\value{subsection}}}\makeatother
+  - \renewcommand{\cftsecfont}{\bfseries}
+  - \renewcommand{\cftsecpagefont}{\bfseries}
+  - \renewcommand{\cftsecaftersnum}{.}
+  - \renewcommand{\cftsubsecaftersnum}{:}
+  - \renewcommand{\cftsecleader}{\hfill}
+  - \setlength{\cftsecnumwidth}{3.2em}
+  - \setlength{\cftsubsecindent}{3.2em}
+  - \setlength{\cftsubsecnumwidth}{4.2em}
+  - \pagestyle{fancy}
+  - \fancyhf{}
+  - \renewcommand{\headrulewidth}{0pt}
+  - \renewcommand{\footrulewidth}{0.4pt}
+  - \fancyfoot[L]{\footnotesize Moitra, Yash}
+  - \fancyfoot[C]{\footnotesize \thepage\ / \pageref{LastPage}}
+  - \fancyfoot[R]{\footnotesize{\calibrifont June 2026}}
+---
+
+```{r setup, include=FALSE}
+library(knitr)
+knitr::opts_chunk$set(echo = FALSE)
+raw <- read.csv("asimplied.csv", check.names = FALSE, stringsAsFactors = FALSE)
+dep <- format(strptime(raw$SOBT, "%d-%m-%Y %H:%M"), "%H%M")
+corpus <- data.frame(flight = raw[["Flight Designator"]],
+                     n      = raw[["S.no"]],
+                     route  = raw[["Routing"]],
+                     dest   = raw[["dest_iata"]],
+                     cap    = raw[["Seats"]],
+                     dep    = dep,
+                     stringsAsFactors = FALSE)
+corpus <- corpus[order(corpus$n), ]
+
+# --- Model M1 parameters (first model column of seats.xlsx) ---
+mean_before <- 150   # minutes before departure (mean entry)
+sigma       <- 30    # minutes (standard deviation)
+LF          <- 1     # load factor for M1
+
+hhmm <- function(m) {            # minutes-of-day (any integer) -> "HHMM", wrapped to 24h
+  m <- ((round(m) %% 1440) + 1440) %% 1440
+  sprintf("%02d%02d", m %/% 60L, m %% 60L)
+}
+```
+
+```{=latex}
+\begin{titlepage}
+\thispagestyle{empty}
+\noindent{\calibrifont\bfseries\footnotesize June 23, 2026}\par
+\vspace*{6cm}
+\noindent{\LARGE\bfseries Checks-in, and Balances: a Matter of Time\par}
+\vspace{2mm}
+\noindent{\footnotesize\bfseries Entry-Time Distributions\par}
+\vspace{5mm}
+\noindent{\itshape Yash Moitra\textsuperscript{\textdagger}\par}
+\vfill
+\noindent{\footnotesize \textsuperscript{\textdagger}\,Delhi International Airport Limited.\par}
+\end{titlepage}
+\pagenumbering{arabic}
+```
+
+```{r curves, results='asis'}
+legend_plain <- function() {
+  cat("\\par\\vspace{3pt}{\\centering\\scriptsize ")
+  cat("\\textcolor{black}{\\rule[0.35ex]{2.6ex}{1.1pt}}\\,M1 entry rate (pax / 10 min)\\quad{}")
+  cat("\\tikz[baseline]{\\draw[dashed,line width=0.7pt] (0,0.5ex) -- (2.6ex,0.5ex);}\\,mean $\\mu$")
+  cat("\\par}\n")
+}
+for (i in seq_len(nrow(corpus))) {
+  f    <- corpus$flight[i]
+  rt   <- corpus$route[i]
+  cap  <- corpus$cap[i]
+  dch  <- corpus$dep[i]
+  depm <- as.integer(substr(dch, 1, 2)) * 60L + as.integer(substr(dch, 3, 4))
+  mu   <- depm - mean_before          # mean entry, minutes of day (may be negative = prior day)
+  pax  <- round(LF * cap)
+  A    <- pax * 10 / (sigma * sqrt(2 * pi))   # peak height, pax per 10 min
+  lo   <- mu - 95; hi <- mu + 95
+  h1   <- ceiling(lo / 60); h2 <- floor(hi / 60)
+  ticks   <- seq(h1 * 60L, h2 * 60L, by = 60L)
+  tickpos <- paste(ticks, collapse = ",")
+  ticklab <- paste(vapply(ticks, hhmm, ""), collapse = ",")
+  ymax <- 100                          # fixed y-axis scale across all flights
+
+  cat("\\begin{figure}[H]\n\\centering\n\\begin{tikzpicture}\n")
+  cat(sprintf(paste0(
+    "\\begin{axis}[\n",
+    "  width=12.5cm, height=8cm,\n",
+    "  axis lines=left,\n",
+    "  x axis line style={-{Latex[length=2.6mm]}},\n",
+    "  y axis line style={-{Latex[length=2.6mm]}},\n",
+    "  xmin=%f, xmax=%f, ymin=0, ymax=%f,\n",
+    "  xtick={%s}, xticklabels={%s},\n",
+    "  ytick distance=10,\n",
+    "  tick style={black},\n",
+    "  x tick label style={font=\\footnotesize}, y tick label style={font=\\footnotesize},\n",
+    "  clip=false\n",
+    "]\n"),
+    lo, hi, ymax, tickpos, ticklab))
+  cat(sprintf(
+    "\\addplot[line width=1pt, domain=%f:%f, samples=100, smooth]{ %f*exp(-(x-(%f))^2/%f) };\n",
+    lo, hi, A, mu, 2 * sigma^2))
+  cat(sprintf("\\draw[dashed, line width=0.7pt] (axis cs:%f,0) -- (axis cs:%f,%f);\n",
+              mu, mu, A))
+  cat(sprintf("\\node[below=11pt, font=\\footnotesize] at (axis cs:%f,0) {$\\mu=%s$};\n",
+              mu, hhmm(mu)))
+  cat("\\end{axis}\n\\end{tikzpicture}\n")
+  legend_plain()
+  cat(sprintf(paste0("\\caption{Flight %s (%s), dep %s. Model M1 entry-time distribution: ",
+                     "Normal, mean 150 min before departure ($\\mu=%s$), SD 30 min; ",
+                     "area $=%d$ pax (LF $=1$).}\n"),
+              f, rt, dch, hhmm(mu), pax))
+  cat("\\end{figure}\n\\clearpage\n")
+}
+```

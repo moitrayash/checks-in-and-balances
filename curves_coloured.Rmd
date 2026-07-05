@@ -1,0 +1,167 @@
+---
+output:
+  pdf_document:
+    latex_engine: xelatex
+    toc: false
+mainfont: "Latin Modern Roman"
+sansfont: "Latin Modern Sans"
+header-includes:
+  - \usepackage{array,booktabs,longtable,calc}
+  - \usepackage{tocloft}
+  - \usepackage{fancyhdr}
+  - \usepackage{lastpage}
+  - \usepackage{graphicx}
+  - \usepackage{xcolor}
+  - \usepackage{tikz}
+  - \usepackage{pgfplots}
+  - \pgfplotsset{compat=1.17}
+  - \usetikzlibrary{arrows.meta}
+  - \usepackage{float}
+  - \usepackage{caption}
+  - \IfFontExistsTF{Calibri}{\newfontfamily\calibrifont{Calibri}}{\IfFontExistsTF{Carlito}{\newfontfamily\calibrifont{Carlito}}{\let\calibrifont\sffamily}}
+  - \setcounter{secnumdepth}{2}
+  - \setcounter{tocdepth}{2}
+  - \renewcommand{\thesection}{\Roman{section}}
+  - \makeatletter\renewcommand{\thesubsection}{\thesection.\two@digits{\value{subsection}}}\makeatother
+  - \renewcommand{\cftsecfont}{\bfseries}
+  - \renewcommand{\cftsecpagefont}{\bfseries}
+  - \renewcommand{\cftsecaftersnum}{.}
+  - \renewcommand{\cftsubsecaftersnum}{:}
+  - \renewcommand{\cftsecleader}{\hfill}
+  - \setlength{\cftsecnumwidth}{3.2em}
+  - \setlength{\cftsubsecindent}{3.2em}
+  - \setlength{\cftsubsecnumwidth}{4.2em}
+  - \pagestyle{fancy}
+  - \fancyhf{}
+  - \renewcommand{\headrulewidth}{0pt}
+  - \renewcommand{\footrulewidth}{0.4pt}
+  - \fancyfoot[L]{\footnotesize Moitra, Yash}
+  - \fancyfoot[C]{\footnotesize \thepage\ / \pageref{LastPage}}
+  - \fancyfoot[R]{\footnotesize{\calibrifont June 2026}}
+---
+
+```{r setup, include=FALSE}
+library(knitr)
+knitr::opts_chunk$set(echo = FALSE)
+raw <- read.csv("asimplied.csv", check.names = FALSE, stringsAsFactors = FALSE)
+dep <- format(strptime(raw$SOBT, "%d-%m-%Y %H:%M"), "%H%M")
+corpus <- data.frame(flight = raw[["Flight Designator"]],
+                     n      = raw[["S.no"]],
+                     route  = raw[["Routing"]],
+                     dest   = raw[["dest_iata"]],
+                     cap    = raw[["Seats"]],
+                     dep    = dep,
+                     code   = trimws(raw[["Airline code"]]),
+                     stringsAsFactors = FALSE)
+corpus <- corpus[order(corpus$n), ]
+
+# --- Model M1 parameters (first model column of seats.xlsx) ---
+mean_before <- 150   # minutes before departure (mean entry)
+sigma       <- 30    # minutes (standard deviation)
+LF          <- 1     # load factor for M1
+
+hhmm <- function(m) {            # minutes-of-day (any integer) -> "HHMM", wrapped to 24h
+  m <- ((round(m) %% 1440) + 1440) %% 1440
+  sprintf("%02d%02d", m %/% 60L, m %% 60L)
+}
+
+# ---- Airline colour map (identical logic in compcurves_coloured.Rmd) ----
+# Codes are IATA, as in the source 'Airline code': AI = Air India (red),
+# 6E = IndiGo (indigo blue), QP = Akasa (orange; no flights here), UA = United (lighter blue).
+fixed_col <- c(AI = "#D62728", "6E" = "#2E2E9E", QP = "#F57C00", UA = "#4F9FE0")
+depmin_all <- as.integer(substr(corpus$dep, 1, 2)) * 60L + as.integer(substr(corpus$dep, 3, 4))
+ord <- names(sort(tapply(depmin_all, corpus$code, median)))   # airlines by median departure
+airline_col <- setNames(character(length(ord)), ord)
+gi <- 0L
+for (a in ord) {
+  if (a %in% names(fixed_col)) {
+    airline_col[a] <- fixed_col[[a]]
+  } else {                               # spread remaining airlines around the hue wheel by the
+    h <- (47 + gi * 137.508) %% 360      # golden angle, in departure order, so time-adjacent
+    airline_col[a] <- hsv(h / 360, 0.65, 0.70)   # airlines contrast; medium S/V keeps them readable
+    gi <- gi + 1L
+  }
+}
+air_name <- setNames(sprintf("airc%d", seq_along(ord)), ord)   # safe xcolor names
+
+# legend: swatch + code per airline, ranked by total seats (load), capped so a figure fits one page
+rank_load <- names(sort(tapply(corpus$cap, corpus$code, sum), decreasing = TRUE))
+LEG_CAP <- 20L
+legend_airline <- function() {
+  show <- rank_load[seq_len(min(length(rank_load), LEG_CAP))]
+  cat("\\par\\vspace{3pt}{\\centering\\scriptsize\n")
+  cat(paste(sprintf("\\textcolor{%s}{\\rule[-0.2ex]{1.6ex}{1.6ex}}\\,%s", air_name[show], show), collapse = "\\quad{}"))
+  if (length(rank_load) > LEG_CAP) cat(sprintf("\\quad{}(+%d more)", length(rank_load) - LEG_CAP))
+  cat("\\par}\n")
+}
+```
+
+```{=latex}
+\begin{titlepage}
+\thispagestyle{empty}
+\noindent{\calibrifont\bfseries\footnotesize June 23, 2026}\par
+\vspace*{6cm}
+\noindent{\LARGE\bfseries Checks-in, and Balances: a Matter of Time\par}
+\vspace{2mm}
+\noindent{\footnotesize\bfseries Entry-Time Distributions (coloured by airline)\par}
+\vspace{5mm}
+\noindent{\itshape Yash Moitra\textsuperscript{\textdagger}\par}
+\vfill
+\noindent{\footnotesize \textsuperscript{\textdagger}\,Delhi International Airport Limited.\par}
+\end{titlepage}
+\pagenumbering{arabic}
+```
+
+```{r curves, results='asis'}
+# define one xcolor colour per airline (emitted once)
+for (a in names(air_name))
+  cat(sprintf("\\definecolor{%s}{HTML}{%s}\n", air_name[[a]], toupper(substr(airline_col[[a]], 2, 7))))
+
+for (i in seq_len(nrow(corpus))) {
+  f    <- corpus$flight[i]
+  rt   <- corpus$route[i]
+  cap  <- corpus$cap[i]
+  dch  <- corpus$dep[i]
+  cname <- air_name[[corpus$code[i]]]          # this flight's airline colour
+  depm <- as.integer(substr(dch, 1, 2)) * 60L + as.integer(substr(dch, 3, 4))
+  mu   <- depm - mean_before          # mean entry, minutes of day (may be negative = prior day)
+  pax  <- round(LF * cap)
+  A    <- pax * 10 / (sigma * sqrt(2 * pi))   # peak height, pax per 10 min
+  lo   <- mu - 95; hi <- mu + 95
+  h1   <- ceiling(lo / 60); h2 <- floor(hi / 60)
+  ticks   <- seq(h1 * 60L, h2 * 60L, by = 60L)
+  tickpos <- paste(ticks, collapse = ",")
+  ticklab <- paste(vapply(ticks, hhmm, ""), collapse = ",")
+  ymax <- 100                          # fixed y-axis scale across all flights
+
+  cat("\\begin{figure}[H]\n\\centering\n\\begin{tikzpicture}\n")
+  cat(sprintf(paste0(
+    "\\begin{axis}[\n",
+    "  width=12.5cm, height=8cm,\n",
+    "  axis lines=left,\n",
+    "  x axis line style={-{Latex[length=2.6mm]}},\n",
+    "  y axis line style={-{Latex[length=2.6mm]}},\n",
+    "  xmin=%f, xmax=%f, ymin=0, ymax=%f,\n",
+    "  xtick={%s}, xticklabels={%s},\n",
+    "  ytick distance=10,\n",
+    "  tick style={black},\n",
+    "  x tick label style={font=\\footnotesize}, y tick label style={font=\\footnotesize},\n",
+    "  clip=false\n",
+    "]\n"),
+    lo, hi, ymax, tickpos, ticklab))
+  cat(sprintf(
+    "\\addplot[line width=1.2pt, color=%s, domain=%f:%f, samples=100, smooth]{ %f*exp(-(x-(%f))^2/%f) };\n",
+    cname, lo, hi, A, mu, 2 * sigma^2))
+  cat(sprintf("\\draw[dashed, line width=0.7pt] (axis cs:%f,0) -- (axis cs:%f,%f);\n",
+              mu, mu, A))
+  cat(sprintf("\\node[below=11pt, font=\\footnotesize] at (axis cs:%f,0) {$\\mu=%s$};\n",
+              mu, hhmm(mu)))
+  cat("\\end{axis}\n\\end{tikzpicture}\n")
+  legend_airline()
+  cat(sprintf(paste0("\\caption{Flight %s (%s), dep %s. Model M1 entry-time distribution: ",
+                     "Normal, mean 150 min before departure ($\\mu=%s$), SD 30 min; ",
+                     "area $=%d$ pax (LF $=1$).}\n"),
+              f, rt, dch, hhmm(mu), pax))
+  cat("\\end{figure}\n\\clearpage\n")
+}
+```

@@ -1,0 +1,169 @@
+---
+output:
+  pdf_document:
+    latex_engine: xelatex
+    toc: false
+mainfont: "Latin Modern Roman"
+sansfont: "Latin Modern Sans"
+header-includes:
+  - \usepackage{graphicx}
+  - \usepackage{xcolor}
+  - \usepackage{tikz}
+  - \usepackage{float}
+  - \usepackage{caption}
+  - \usepackage{fancyhdr}
+  - \usepackage{lastpage}
+  - \IfFontExistsTF{Calibri}{\newfontfamily\calibrifont{Calibri}}{\IfFontExistsTF{Carlito}{\newfontfamily\calibrifont{Carlito}}{\let\calibrifont\sffamily}}
+  - \pagestyle{fancy}
+  - \fancyhf{}
+  - \renewcommand{\headrulewidth}{0pt}
+  - \renewcommand{\footrulewidth}{0.4pt}
+  - \fancyfoot[L]{\footnotesize Moitra, Yash}
+  - \fancyfoot[C]{\footnotesize \thepage\ / \pageref{LastPage}}
+  - \fancyfoot[R]{\footnotesize{\calibrifont June 2026}}
+---
+
+```{r setup, include=FALSE}
+library(knitr)
+knitr::opts_chunk$set(echo = FALSE)
+raw <- read.csv("asimplied.csv", check.names = FALSE, stringsAsFactors = FALSE)
+dep <- format(strptime(raw$SOBT, "%d-%m-%Y %H:%M"), "%H%M")
+corpus <- data.frame(flight = raw[["Flight Designator"]],
+                     n      = raw[["S.no"]],
+                     route  = raw[["Routing"]],
+                     dest   = raw[["dest_iata"]],
+                     cap    = raw[["Seats"]],
+                     dep    = dep,
+                     code   = trimws(raw[["Airline code"]]),
+                     stringsAsFactors = FALSE)
+corpus <- corpus[order(corpus$n), ]
+
+# --- Model M1 parameters (first model column of seats.xlsx) ---
+mean_before <- 150   # minutes before departure (mean entry)
+sigma       <- 30    # minutes (standard deviation)
+LF          <- 1     # load factor for M1
+YMAX        <- 300   # fixed y-axis ceiling (multiple of 100); covers the tallest stacked airline (Air India ~235)
+
+hhmm <- function(m) {            # minutes-of-day (any integer) -> "HHMM", wrapped to 24h
+  m <- ((round(m) %% 1440) + 1440) %% 1440
+  sprintf("%02d%02d", m %/% 60L, m %% 60L)
+}
+endlab <- function(v) if (v == 1440L) "2400" else hhmm(v)   # show end of day as 2400
+
+# ---- Airline colour map (identical logic in curves_coloured.Rmd / compcurves_coloured.Rmd) ----
+# Codes are IATA, as in the source 'Airline code': AI = Air India (red),
+# 6E = IndiGo (indigo blue), QP = Akasa (orange; no flights here), UA = United (lighter blue).
+fixed_col <- c(AI = "#D62728", "6E" = "#2E2E9E", QP = "#F57C00", UA = "#4F9FE0")
+depmin_all <- as.integer(substr(corpus$dep, 1, 2)) * 60L + as.integer(substr(corpus$dep, 3, 4))
+ord <- names(sort(tapply(depmin_all, corpus$code, median)))   # airlines by median departure
+airline_col <- setNames(character(length(ord)), ord)
+gi <- 0L
+for (a in ord) {
+  if (a %in% names(fixed_col)) {
+    airline_col[a] <- fixed_col[[a]]
+  } else {                               # spread remaining airlines around the hue wheel by the
+    h <- (47 + gi * 137.508) %% 360      # golden angle, in departure order, so time-adjacent
+    airline_col[a] <- hsv(h / 360, 0.65, 0.70)   # airlines contrast; medium S/V keeps them readable
+    gi <- gi + 1L
+  }
+}
+air_name <- setNames(sprintf("airc%d", seq_along(ord)), ord)   # safe xcolor names
+
+# legend: swatch + code per airline, ranked by total seats (load), capped so a figure fits one page
+rank_load <- names(sort(tapply(corpus$cap, corpus$code, sum), decreasing = TRUE))
+LEG_CAP <- 20L
+legend_airline <- function() {
+  show <- rank_load[seq_len(min(length(rank_load), LEG_CAP))]
+  cat("\\par\\vspace{3pt}{\\centering\\scriptsize\n")
+  cat(paste(sprintf("\\textcolor{%s}{\\rule[-0.2ex]{1.6ex}{1.6ex}}\\,%s", air_name[show], show), collapse = "\\quad{}"))
+  if (length(rank_load) > LEG_CAP) cat(sprintf("\\quad{}(+%d more)", length(rank_load) - LEG_CAP))
+  cat("\\par}\n")
+}
+```
+
+```{=latex}
+\begin{titlepage}
+\thispagestyle{empty}
+\noindent{\calibrifont\bfseries\footnotesize June 23, 2026}\par
+\vspace*{6cm}
+\noindent{\LARGE\bfseries Checks-in, and Balances: a Matter of Time\par}
+\vspace{2mm}
+\noindent{\footnotesize\bfseries Entry-Time Load by Airline (stacked)\par}
+\vspace{5mm}
+\noindent{\itshape Yash Moitra\textsuperscript{\textdagger}\par}
+\vfill
+\noindent{\footnotesize \textsuperscript{\textdagger}\,Delhi International Airport Limited.\par}
+\end{titlepage}
+\pagenumbering{arabic}
+```
+
+```{r comp, results='asis'}
+# define one xcolor colour per airline (emitted once)
+for (a in names(air_name))
+  cat(sprintf("\\definecolor{%s}{HTML}{%s}\n", air_name[[a]], toupper(substr(airline_col[[a]], 2, 7))))
+
+depm   <- as.integer(substr(corpus$dep, 1, 2)) * 60L + as.integer(substr(corpus$dep, 3, 4))
+mu_all <- (((depm - mean_before) %% 1440L) + 1440L) %% 1440L   # mean entry clock time, wrapped to the day
+pax    <- round(LF * corpus$cap)
+A_all  <- pax * 10 / (sigma * sqrt(2 * pi))                    # per-flight peak, pax per 10 min
+
+# Each panel: one curve per airline = sum of that airline's flight curves (same-airline flights
+# add vertically). Different airlines stay as separate coloured curves. Plain TikZ (light).
+panel <- function(W0, W1, lab) {
+  span <- W1 - W0
+  xstep <- if (span <= 480L) 60L else if (span <= 720L) 120L else 180L
+  Wcm  <- 15.5; Hcm <- 7.0
+  sx   <- Wcm / span
+  sy   <- Hcm / YMAX
+  xc   <- function(m) (m - W0) * sx
+  yc   <- function(v) v * sy
+  gstep <- max(1L, as.integer(round(span / 240)))            # grid resolution (minutes)
+
+  cat("\\begin{figure}[H]\n\\centering\n\\begin{tikzpicture}\n")
+  cat(sprintf("\\draw[->] (0,0) -- (%.3f,0);\n", Wcm + 0.4))
+  cat(sprintf("\\draw[->] (0,0) -- (0,%.3f);\n", Hcm + 0.4))
+  for (v in seq(0L, YMAX, 50L)) {                            # y ticks every 50
+    cat(sprintf("\\draw (-0.07,%.3f) -- (0.07,%.3f);\n", yc(v), yc(v)))
+    cat(sprintf("\\node[left, font=\\footnotesize] at (-0.10,%.3f) {%d};\n", yc(v), v))
+  }
+  for (t in seq(W0, W1, by = xstep)) {                       # x ticks (HHMM)
+    cat(sprintf("\\draw (%.3f,-0.07) -- (%.3f,0.07);\n", xc(t), xc(t)))
+    cat(sprintf("\\node[below, font=\\footnotesize] at (%.3f,-0.07) {%s};\n", xc(t), endlab(t)))
+  }
+  for (a in ord) {                                           # one summed polyline per airline
+    idx <- which(corpus$code == a)
+    mus <- mu_all[idx]; As <- A_all[idx]
+    gmin <- max(W0, min(mus) - 90L); gmax <- min(W1, max(mus) + 90L)
+    if (gmax <= gmin) next
+    grid <- seq(gmin, gmax, by = gstep)
+    if (length(grid) < 2) next
+    S <- vapply(grid, function(t) sum(As * exp(-((t - mus)^2) / (2 * sigma^2))), numeric(1))
+    if (max(S) < 0.5) next                                   # airline not active in this window
+    S <- pmin(S, YMAX)
+    pts <- paste(sprintf("(%.3f,%.3f)", xc(grid), yc(S)), collapse = " ")
+    cat(sprintf("\\draw[color=%s, opacity=0.8, line width=0.6pt] plot coordinates {%s};\n",
+                air_name[[a]], pts))
+  }
+  cat("\\end{tikzpicture}\n")
+  legend_airline()
+  cat(sprintf(paste0("\\caption{Stacked entry-time load by airline, %s. Each curve is one airline's ",
+                     "total M1 entry rate (its flights summed); colours per airline; vertical axis pax per ",
+                     "10 min on a fixed 0 to 300 scale.}\n"), lab))
+  cat("\\end{figure}\n\\clearpage\n")
+}
+
+# 1) Four-hour windows (0000-0400, ... , 2000-2400)
+for (k in 0:5) panel(k*240L, (k+1)*240L,
+                     sprintf("%s to %s (4 h window)", hhmm(k*240L), endlab((k+1)*240L)))
+
+# 2) Eight-hour windows (0000-0800, 0800-1600, 1600-2400)
+for (k in 0:2) panel(k*480L, (k+1)*480L,
+                     sprintf("%s to %s (8 h window)", hhmm(k*480L), endlab((k+1)*480L)))
+
+# 3) Twelve-hour windows (0000-1200, 1200-2400)
+for (k in 0:1) panel(k*720L, (k+1)*720L,
+                     sprintf("%s to %s (12 h window)", hhmm(k*720L), endlab((k+1)*720L)))
+
+# 4) Full 24-hour day
+panel(0L, 1440L, "0000 to 2400 (24 h, full day)")
+```

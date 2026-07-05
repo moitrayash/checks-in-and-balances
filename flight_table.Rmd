@@ -1,0 +1,8 @@
+---
+output: pdf_document
+---
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+data <- read.csv("asimplied.csv", check.names = FALSE, fileEncoding = "latin1")
+knitr::kable(data[, c("Flight Designator", "SOBT", "dest_iata", "GHA", "Seats")])
+```
