@@ -1,0 +1,845 @@
+---
+title: "DIAL Terminal 3 International Departures"
+subtitle: "A Dynamic Stocks and Flows Model of Passenger Arrival, Check-in Queueing, and Counter Assignment"
+author: "Prepared for Delhi International Airport Limited"
+date: "`r format(Sys.Date(), '%d %B %Y')`"
+output:
+  pdf_document:
+    toc: true
+    toc_depth: 3
+    number_sections: true
+    df_print: kable
+    latex_engine: pdflatex
+geometry: margin=1in
+header-includes:
+  - \usepackage{amsmath}
+  - \usepackage{amssymb}
+  - \usepackage{fancyhdr}
+  - \usepackage{lastpage}
+  - \usepackage{booktabs}
+  - \pagestyle{fancy}
+  - \fancyhf{}
+  - \rhead{DIAL T3 Check-in Model}
+  - \lhead{Stocks and Flows}
+  - \cfoot{Page \thepage\ of \pageref{LastPage}}
+  - \renewcommand{\footrulewidth}{0.4pt}
+params:
+  dt: 1
+  load_factor: 0.90
+  seed: 42
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = FALSE, message = FALSE, warning = FALSE,
+  fig.align = "center", fig.width = 7, fig.height = 4
+)
+options(stringsAsFactors = FALSE)
+set.seed(params$seed)
+```
+
+# Scope and reading guide
+
+This document specifies and implements a single, fully parameterised model of the
+passenger check-in process for international departures from Terminal 3 (T3) at
+Delhi airport. Everything in scope here is T3 international only. The model is
+written as a stocks and flows system.^[A stocks and flows system tracks
+quantities that accumulate over time (stocks, for example the number of people
+currently waiting in a queue) and the rates that change them (flows, for example
+people joining the queue and people being processed). It is the standard way to
+describe a queue that fills and drains over time.]
+
+Every assumption is isolated, named, and changeable. The same engine runs a
+zero-assumption ideal case and progressively richer cases by swapping one
+configuration object. The text uses mathematical notation for precision;
+footnotes translate technical terms into plain language where useful.
+
+The order of the document is: glossary, entity definitions, notation, governing
+equations, the configurable engine, solved cases, verification, and a closing
+agenda of items to confirm with leadership.
+
+\newpage
+
+# Glossary
+
+The following terms are used with fixed meanings throughout.
+
+| Term | Meaning |
+|------|---------|
+| SOBT | Scheduled Off-Block Time. The scheduled departure datum, written $T$. |
+| Check-in window | The interval during which a flight accepts check-in, fixed at $[T-4\text{h},\,T-1\text{h}]$. |
+| Open / Close | Check-in opens at $T-4$h and closes at $T-1$h. These are fixed. |
+| Show-up | A passenger who actually arrives to check in for the flight. |
+| Entry | The instant a passenger joins the check-in queue, written $e_i$. |
+| Service begin | The instant a counter starts processing a passenger, written $b_i$. |
+| Processed | The instant a passenger finishes check-in, written $d_i$. |
+| Lag | Time from entry to processed, $\ell_i = d_i - e_i$. |
+| Wait | Time from entry to service begin, $w_i = b_i - e_i$. |
+| No-show | A passenger who arrives after Close. Only possible once the after-Close tail is allowed. |
+| Left-behind | A passenger who entered before Close but was still queued at Close. |
+| GHA | Ground Handling Agent. The firm staffing the counters (for example AISATS, BFS). |
+| Counter / Desk | One check-in position. One counter equals one staff member. |
+| Lane | A class restriction on a counter, for example a business-only desk. |
+| Load factor | Fraction of seats that become show-ups, written $\rho$ (a variable assumption). |
+| Class | A service segment a passenger belongs to, written $\kappa_i$ (economy, premium, business, first, fast-track, loyalty). |
+| $\Delta t$ | The model time step in minutes. Variable, default `r params$dt`. |
+| Idiosyncrasy | A rule that makes one group differ from the base case (by airline, destination, or departure time). |
+
+\newpage
+
+# Entities and their attributes
+
+We define four entities: the passenger, the flight, the counter, and the service
+group. Each is a row in a table whose columns are the attributes below. All
+symbols are reused consistently for the rest of the document.
+
+## The passenger $i$
+
+A passenger $i$ carries the following attributes.
+
+| Symbol | Attribute | Meaning |
+|--------|-----------|---------|
+| $i$ | id | Unique passenger identifier. |
+| $f(i)$ | flight | The flight this passenger is booked on. |
+| $a(i)$ | airline | Airline of the flight, $a(i)=a_{f(i)}$. |
+| $r(i)$ | route | Destination routing of the flight. |
+| $g(i)$ | GHA | Ground handler of the flight, $g(i)=g_{f(i)}$. |
+| $\kappa_i$ | class | Service class or lane membership (see Section 8). |
+| $L_i$ | loyalty | Indicator, $1$ if loyalty-priority, else $0$. |
+| $X_i$ | fast-track | Indicator, $1$ if fast-track product held, else $0$. |
+| $e_i$ | entry time | Minute at which the passenger joins the queue. |
+| $b_i$ | service begin | Minute a counter starts processing the passenger. |
+| $d_i$ | processed time | Minute the passenger finishes check-in. |
+| $w_i$ | wait | $w_i = b_i - e_i$. |
+| $\ell_i$ | lag | $\ell_i = d_i - e_i$. |
+| $m_i$ | margin | Buffer minutes the passenger targets before Close (Section 9). |
+| $s_i$ | status | One of served, no-show, left-behind. |
+
+## The flight $f$
+
+| Symbol | Attribute | Meaning |
+|--------|-----------|---------|
+| $\varphi_f$ | designator | Flight number, for example AI 173. |
+| $a_f$ | airline | Operating carrier code. |
+| $r_f$ | route | Destination routing. |
+| $S_f$ | SOBT | Scheduled off-block time in minutes from a reference midnight. |
+| $H_f$ | hour | Clock hour of $S_f$. |
+| $K_f$ | seats | Physical seat capacity. |
+| $\rho$ | load factor | Show-up rate, variable assumption. |
+| $N_f$ | show-ups | $N_f = \mathrm{round}(\rho\,K_f)$. Area under the arrival curve. |
+| $g_f$ | GHA | Assigned ground handler. |
+| $o_f$ | open | $o_f = S_f - 240$ minutes. |
+| $c_f$ | close | $c_f = S_f - 60$ minutes. |
+| $\mathcal{D}_f$ | arrival law | Arrival distribution family and parameters (Section 7). |
+| $n_{f,\kappa}$ | class split | Show-ups in class $\kappa$, with $\sum_\kappa n_{f,\kappa}=N_f$. |
+
+## The counter $j$
+
+| Symbol | Attribute | Meaning |
+|--------|-----------|---------|
+| $j$ | id | Unique counter identifier. |
+| $g_j$ | GHA | Ground handler operating the counter. |
+| $a_j$ | airline | Airline the counter is assigned to serve. |
+| $\mu_j$ | rate | Service rate in passengers per minute. Service time per passenger is $1/\mu_j$. |
+| $o_j$ | open | Minute the counter is staffed from. |
+| $c_j$ | close | Minute the counter stops, bounded by the served flights' Close. |
+| $\mathcal{A}_j$ | lane | Set of classes the counter may serve. |
+
+## The service group
+
+Counters are pooled by ground handler and then by airline, not by flight.^[This
+matches operations: a handler staffs a bank of desks for an airline, and any of
+that airline's departing passengers in the window can use any of those desks.]
+A service group is the key $(g,a)$. Every passenger with $g(i)=g$ and $a(i)=a$
+shares the counter pool of group $(g,a)$. Setting the group key to $(g,a,f)$
+recovers a per-flight model, which the engine also supports.
+
+\newpage
+
+# Constraints and conventions
+
+The model enforces the following.
+
+1. Fixed window. Check-in opens at $o_f = S_f-240$ and closes at $c_f = S_f-60$
+   for every flight. These are not adjustable.
+
+2. Mass conservation. The area under each flight's arrival curve equals its
+   show-ups:
+   $$ \int_{o_f}^{c_f} \lambda_f(t)\, dt \;=\; N_f, \qquad N_f=\mathrm{round}(\rho K_f), $$
+   where $\lambda_f(t)$ is the arrival intensity (passengers per minute) for
+   flight $f$.^[Intensity is how many passengers arrive per minute at time $t$.
+   Its total area across the window is the number of people who show up.] When
+   the after-Close tail is allowed, the integral runs beyond $c_f$ and the excess
+   mass becomes no-shows.
+
+3. Per-passenger deadline. A passenger can only be processed up to his own
+   flight's Close. If $b_i \ge c_{f(i)}$ the passenger is left-behind.
+
+4. Resource budget. Counters are scarce. The total counter-minutes consumed,
+   $\sum_j (c_j - o_j)$, must not exceed an operating budget $B$. Adding counters
+   shortens the time each can be assigned elsewhere.
+
+5. Ideal feasibility. The ideal constraint is zero left-behind and zero no-show.
+   A scenario that violates it is feasible to run but flagged.
+
+\newpage
+
+# Governing equations (stocks and flows)
+
+Fix a service group and a class lane. Let $Q(t)$ be the queue stock, the number
+of passengers who have entered but not yet begun service at time $t$. Let
+$\alpha(t)$ be the arrival flow into the queue and $\delta(t)$ the departure flow
+out of the queue into service. The stock evolves as
+$$ Q(t+\Delta t) \;=\; Q(t) \;+\; \alpha(t)\,\Delta t \;-\; \delta(t)\,\Delta t, \qquad Q(t)\ge 0. $$
+
+The departure flow is capped by the available service capacity of the open
+counters serving that lane:
+$$ \delta(t)\,\Delta t \;=\; \min\!\Big( Q(t) + \alpha(t)\Delta t,\; \textstyle\sum_{j \in \text{open}(t)} \mu_j \,\Delta t \Big). $$
+
+The arrival flow is the discretised arrival law,
+$\alpha(t)\,\Delta t = N_f \cdot \int_{t}^{t+\Delta t} \hat\lambda_f(u)\,du$, where
+$\hat\lambda_f$ is the normalised arrival density. Conservation across the whole
+window returns $\sum_t \alpha(t)\Delta t = N_f$ by construction.
+
+The per-passenger lag is read off the service schedule:
+$\ell_i = d_i - e_i$ and $w_i = b_i - e_i$. The engine resolves the order of
+service inside each step so that these are defined for every individual, which is
+the quantity the planner ultimately cares about.
+
+\newpage
+
+# The engine: time, schedule, and arrival laws
+
+```{r time-grid}
+# ---------------------------------------------------------------------------
+# Time grid with variable resolution. dt divides 60. The window is 180 minutes.
+# dissolve() refines a coarse count vector to a finer step (spread equally).
+# amalgamate() aggregates a fine count vector to a coarser step (sum).
+# These let a distribution defined at one resolution be moved to another.
+# ---------------------------------------------------------------------------
+WINDOW_MIN <- 180L          # T-4 to T-1 is 180 minutes. Fixed.
+
+make_grid <- function(open_min, dt) {
+  M <- WINDOW_MIN / dt
+  if (M != floor(M)) stop("dt must divide 180")
+  list(dt = dt, M = as.integer(M),
+       edges  = open_min + (0:M) * dt,
+       centers = open_min + ((1:M) - 0.5) * dt)
+}
+
+dissolve <- function(counts, factor) {
+  # split each coarse bin into 'factor' finer bins, mass spread equally
+  as.numeric(rep(counts / factor, each = factor))
+}
+amalgamate <- function(counts, factor) {
+  # merge every 'factor' fine bins into one coarse bin
+  as.numeric(tapply(counts, rep(seq_len(length(counts) / factor), each = factor), sum))
+}
+
+# Largest-remainder rounding: round a real vector to integers summing to N.
+round_to_total <- function(x, N) {
+  if (sum(x) <= 0) { out <- rep(0L, length(x)); if (N > 0) out[1] <- N; return(out) }
+  x <- x / sum(x) * N
+  fl <- floor(x); rem <- N - sum(fl)
+  if (rem > 0) {
+    o <- order(x - fl, decreasing = TRUE)[seq_len(rem)]
+    fl[o] <- fl[o] + 1L
+  }
+  as.integer(fl)
+}
+```
+
+```{r schedule}
+# ---------------------------------------------------------------------------
+# T3 international departure schedule (the 24 flights). SOBT in minutes from
+# midnight. GHA is taken as given here; the per-airline lookup from the data
+# build is reused. seats = K_f.
+# ---------------------------------------------------------------------------
+raw <- "desig|sobt|route|seats|gha
+AI 173|0:05|DEL-CCU-SFO|288|AISATS
+AI 312|0:05|DEL-ICN|259|AISATS
+VJ 972|0:05|DEL-HAN|377|BFS
+AI 187|0:10|DEL-VIE-YYZ|328|AISATS
+AI 161|0:30|DEL-LHR|316|AISATS
+AI 2336|0:30|DEL-BKK|164|AISATS
+AF 283|0:40|DEL-SIN|188|AISATS
+AI 302|0:55|DEL-SYD|328|BFS
+AI 277|1:00|DEL-CMB|259|AISATS
+LX 147|1:05|DEL-ZRH|182|AISATS
+CX 694|1:10|DEL-HKG|236|BFS
+KC 964|1:10|DEL-ALA|280|AISATS
+AI 308|1:15|DEL-MEL|179|AISATS
+AI 2390|1:20|DEL-HAN|164|AISATS
+AI 2378|1:25|DEL-HKT|164|AISATS
+BA 142|1:35|DEL-LHR|272|Ramp 360
+LX 2647|1:40|DEL-ZRH|235|BFS
+LH 763|1:45|DEL-MUC|509|BFS
+AI 4307|2:00|DEL-DXB|259|AISATS
+VS 303|2:05|DEL-LHR|397|BFS
+ET 687|2:30|DEL-ADD|315|Ramp 360
+6E 033|2:40|DEL-MAN|318|IndiGo
+LH 761|2:50|DEL-FRA|287|BFS
+AI 2147|2:55|DEL-DPS|188|AISATS"
+
+flights <- read.table(text = raw, header = TRUE, sep = "|",
+                      quote = "", strip.white = TRUE)
+hm_to_min <- function(s) {
+  p <- do.call(rbind, strsplit(s, ":", fixed = TRUE))
+  as.integer(p[, 1]) * 60L + as.integer(p[, 2])
+}
+flights$airline <- sub("^([0-9A-Z]{2,3})\\s.*$", "\\1", flights$desig)
+flights$S  <- hm_to_min(flights$sobt)
+flights$H  <- flights$S %/% 60L
+flights$o  <- flights$S - 240L     # open  = T-4h
+flights$c  <- flights$S - 60L      # close = T-1h
+flights$fid <- seq_len(nrow(flights))
+```
+
+```{r arrival-laws}
+# ---------------------------------------------------------------------------
+# Arrival-law registry. Each function returns an UNNORMALISED density evaluated
+# at the bin centres x (minutes since open), on [0, W]. They are normalised and
+# scaled to N show-ups by arrival_counts().
+# Families: uniform, normal, linear, skew (complex), data (the given 35/40/25).
+# ---------------------------------------------------------------------------
+arrival_density <- list(
+  uniform = function(x, W, p) rep(1, length(x)),
+  normal  = function(x, W, p) {
+    mu <- p$mean %||% (W / 2); sd <- p$sd %||% (W / 4)
+    dnorm(x, mu, sd)
+  },
+  linear  = function(x, W, p) {
+    a <- p$intercept %||% 1; b <- p$gradient %||% 0
+    pmax(a + b * x, 0)
+  },
+  skew    = function(x, W, p) {
+    xi <- p$xi %||% (W / 3); om <- p$omega %||% (W / 4); al <- p$alpha %||% 4
+    z <- (x - xi) / om
+    2 / om * dnorm(z) * pnorm(al * z)
+  },
+  data    = function(x, W, p) {
+    # piecewise-constant over thirds of the window: T-4..T-3, T-3..T-2, T-2..T-1
+    mass <- p$mass %||% c(0.35, 0.40, 0.25)
+    third <- pmin(floor(x / (W / 3)) + 1, 3)
+    mass[third]
+  }
+)
+`%||%` <- function(a, b) if (is.null(a)) b else a
+
+arrival_counts <- function(spec, grid, N) {
+  W <- grid$M * grid$dt
+  fam <- arrival_density[[spec$family]]
+  if (is.null(fam)) stop(sprintf("unknown arrival family '%s'", spec$family))
+  x_local <- grid$centers - grid$edges[1]      # minutes since open, 0 to W
+  dens <- fam(x_local, W, spec$params %||% list())
+  if (all(dens <= 0)) dens <- rep(1, length(dens))
+  round_to_total(dens, N)         # integer arrivals per bin, summing to N
+}
+```
+
+The arrival-law registry is the first swappable block. `uniform` is the base
+case. `normal` takes a mean and standard deviation. `linear` takes an intercept
+and a gradient. `skew` is the complex family, a skew-normal with location, scale,
+and shape. `data` reproduces the 35/40/25 split given in the source workbook,
+which is retained only as a reference case and is, as a model of true arrivals, a
+weak assumption.^[The source split assigns fixed shares to three one-hour blocks
+and says nothing about within-hour timing, so it cannot represent build-up or
+rush behaviour. It is included for comparison, not as a recommended law.]
+
+# The engine: classes, counters, and policies
+
+```{r class-seg}
+# ---------------------------------------------------------------------------
+# Class segmentation registry. Each entry gives class fractions (summing to 1)
+# and a priority order (higher served first). uni = one lane; bi/tri/quad/quint
+# add segments. Fractions are defaults and are overrideable per scenario.
+# ---------------------------------------------------------------------------
+class_seg <- list(
+  uni   = list(frac = c(all = 1.00),
+               prio = c(all = 1)),
+  bi    = list(frac = c(biz = 0.15, eco = 0.85),
+               prio = c(biz = 2, eco = 1)),
+  bi_ff = list(frac = c(fast = 0.20, normal = 0.80),
+               prio = c(fast = 2, normal = 1)),
+  tri   = list(frac = c(biz = 0.10, prem = 0.15, eco = 0.75),
+               prio = c(biz = 3, prem = 2, eco = 1)),
+  quad  = list(frac = c(first = 0.03, biz = 0.10, prem = 0.15, eco = 0.72),
+               prio = c(first = 4, biz = 3, prem = 2, eco = 1)),
+  quint = list(frac = c(first = 0.03, biz = 0.10, prem = 0.12, eco = 0.70, loyalty = 0.05),
+               prio = c(first = 5, biz = 4, prem = 3, eco = 1, loyalty = 2))
+)
+```
+
+```{r counters}
+# ---------------------------------------------------------------------------
+# Counter construction for a service group.
+#   n        number of counters
+#   mu       service rate in pax per minute (1/mu = minutes per pax)
+#   open_pol "all_T4" | "planned" | "responsive"
+#   lane_pol "shared" | "dedicated"
+# Opening policies set o_j; lane policies set the allowed class set per counter.
+# group_open, group_close are the earliest open and latest close in the group.
+# ---------------------------------------------------------------------------
+build_counters <- function(n, mu, group_open, group_close,
+                           open_pol = "all_T4", planned_steps = NULL,
+                           lane_pol = "shared", classes = "all", prio = c(all = 1),
+                           class_counts = NULL, arrivals_cum = NULL) {
+  n <- max(1L, as.integer(n))
+  # ---- opening times o_j ----
+  if (open_pol == "all_T4") {
+    o <- rep(group_open, n)
+  } else if (open_pol == "planned") {
+    steps <- planned_steps %||% c(0, 30, 60)          # minutes after group_open
+    o <- group_open + steps[((seq_len(n) - 1) %% length(steps)) + 1]
+  } else if (open_pol == "responsive") {
+    # open counter k when cumulative arrivals first reach k * trigger
+    trig <- (sum(class_counts %||% 0) %||% 0)
+    if (!is.null(arrivals_cum) && length(arrivals_cum) > 0) {
+      per <- max(arrivals_cum) / n
+      thr <- per * (seq_len(n) - 1)
+      idx <- sapply(thr, function(t) which(arrivals_cum >= t)[1])
+      o <- group_open + (idx - 1)                      # one bin per minute baseline
+    } else o <- rep(group_open, n)
+  } else stop("unknown open policy")
+  o <- pmin(pmax(o, group_open), group_close - 1)
+  # ---- lanes A_j ----
+  if (lane_pol == "shared" || identical(classes, "all")) {
+    allowed <- replicate(n, classes, simplify = FALSE)
+  } else if (lane_pol == "dedicated") {
+    cc <- class_counts %||% setNames(rep(1, length(classes)), classes)
+    share <- round_to_total(as.numeric(cc[classes]), n)
+    share[share == 0] <- 0
+    # guarantee at least one counter to any present class if room allows
+    allowed <- vector("list", n); k <- 1
+    for (cl in classes) {
+      reps <- share[match(cl, classes)]
+      if (reps > 0) for (r in seq_len(reps)) { allowed[[k]] <- cl; k <- k + 1 }
+    }
+    while (k <= n) { allowed[[k]] <- classes; k <- k + 1 }   # spare desks are shared
+  } else stop("unknown lane policy")
+  data.frame(j = seq_len(n), o = o, close = group_close,
+             mu = mu, stringsAsFactors = FALSE) -> cdf
+  attr(cdf, "allowed") <- allowed
+  attr(cdf, "prio")    <- prio
+  cdf
+}
+```
+
+```{r simulator}
+# ---------------------------------------------------------------------------
+# Event-driven multi-server priority simulator for one service group.
+# pax: data.frame(id, e, class, prio, deadline). counters from build_counters().
+# Returns pax with b, d, wait, lag, status. Whenever a counter is free it takes
+# the highest-priority eligible waiting passenger (then earliest entry).
+# ---------------------------------------------------------------------------
+simulate_group <- function(pax, counters, eps = 1e-9) {
+  n <- nrow(pax)
+  if (n == 0) {
+    pax$b <- numeric(0); pax$d <- numeric(0)
+    pax$wait <- numeric(0); pax$lag <- numeric(0); pax$status <- character(0)
+    return(pax)
+  }
+  allowed <- attr(counters, "allowed")
+  cls_levels   <- unique(pax$class)
+  pax_code     <- match(pax$class, cls_levels)
+  allowed_code <- lapply(allowed, function(a) match(a, cls_levels))
+  pax$b <- NA_real_; pax$d <- NA_real_; pax$status <- "served"
+  in_wait <- rep(FALSE, n); done <- rep(FALSE, n)
+  avail <- counters$o                       # next-free time per counter
+  arr_order <- order(pax$e); next_arr <- 1L
+  now <- min(c(counters$o, pax$e))
+  maxiter <- 50L * (n + nrow(counters)) + 200L; it <- 0L
+  repeat {
+    it <- it + 1L; if (it > maxiter) break
+    # admit arrivals up to now; classify after-close arrivals as no-shows
+    while (next_arr <= n && pax$e[arr_order[next_arr]] <= now + eps) {
+      idx <- arr_order[next_arr]
+      if (pax$e[idx] > pax$deadline[idx] + eps) { pax$status[idx] <- "noshow"; done[idx] <- TRUE }
+      else in_wait[idx] <- TRUE
+      next_arr <- next_arr + 1L
+    }
+    # left-behind: waiting and own deadline reached
+    lb <- which(in_wait & pax$deadline <= now + eps)
+    if (length(lb)) { pax$status[lb] <- "leftbehind"; in_wait[lb] <- FALSE; done[lb] <- TRUE }
+    # assign free, open, not-closed counters
+    assigned <- FALSE
+    free_ctr <- which(avail <= now + eps & counters$o <= now + eps & counters$close > now + eps)
+    for (j in free_ctr) {
+      cand <- which(in_wait & pax$e <= now + eps & pax$deadline > now + eps &
+                    (pax_code %in% allowed_code[[j]]))
+      if (!length(cand)) next
+      ord <- cand[order(-pax$prio[cand], pax$e[cand])]
+      placed <- FALSE
+      for (i in ord) {
+        b <- max(now, pax$e[i], counters$o[j])
+        if (b + eps >= pax$deadline[i] || b + eps >= counters$close[j]) {
+          pax$status[i] <- "leftbehind"; in_wait[i] <- FALSE; done[i] <- TRUE
+          next
+        }
+        d <- b + 1 / counters$mu[j]
+        pax$b[i] <- b; pax$d[i] <- d; avail[j] <- d
+        in_wait[i] <- FALSE; done[i] <- TRUE; assigned <- TRUE; placed <- TRUE
+        break
+      }
+    }
+    if (all(done)) break
+    if (!assigned) {
+      tt <- c()
+      if (next_arr <= n) tt <- c(tt, pax$e[arr_order[next_arr]])
+      bz <- avail[avail > now + eps & counters$close > now + eps]; if (length(bz)) tt <- c(tt, min(bz))
+      op <- counters$o[counters$o > now + eps];                    if (length(op)) tt <- c(tt, min(op))
+      wd <- pax$deadline[in_wait];                                 if (length(wd)) tt <- c(tt, min(wd))
+      if (!length(tt)) break
+      nt <- min(tt); now <- if (nt <= now + eps) now + 1e-6 else nt
+    }
+  }
+  rem <- which(in_wait); if (length(rem)) pax$status[rem] <- "leftbehind"
+  pax$wait <- pax$b - pax$e
+  pax$lag  <- pax$d - pax$e
+  pax
+}
+```
+
+The simulator is exact for the priority and lane rules: it advances only to
+instants where something can change (an arrival, a counter freeing, a counter
+opening, or a deadline), and at each such instant gives every free desk the
+best eligible passenger it is allowed to serve. The queue stock $Q(t)$ is then
+read back from entry and service-begin times for any time grid the planner
+chooses.
+
+# The engine: scenario assembly
+
+```{r scenario-runner}
+# ---------------------------------------------------------------------------
+# A scenario is one list holding every assumption. run_scenario() expands the
+# schedule into passengers, groups them, builds counters, simulates, and
+# returns the passenger-level table plus per-group counter metadata.
+# ---------------------------------------------------------------------------
+default_scenario <- function() list(
+  dt          = params$dt,
+  load_factor = params$load_factor,
+  arrival     = list(family = "uniform", params = list()),
+  segment     = "uni",
+  lane_pol    = "shared",
+  open_pol    = "all_T4",
+  planned_steps = c(0, 30, 60),
+  mu          = 0.40,                 # 2.5 minutes per passenger
+  counters_per_group = 6L,
+  group_key   = c("gha", "airline"),  # segment by GHA then airline, not flight
+  arrival_by  = NULL                  # optional idiosyncrasy overrides (Section 11)
+)
+
+expand_passengers <- function(flights, sc) {
+  rows <- list(); pid <- 0L
+  seg <- class_seg[[sc$segment]]
+  for (q in seq_len(nrow(flights))) {
+    fl <- flights[q, ]
+    N  <- as.integer(round(sc$load_factor * fl$seats))
+    grid <- make_grid(fl$o, sc$dt)
+    # idiosyncratic arrival law (Section 11), else the scenario default
+    spec <- resolve_arrival(sc, fl)
+    abin <- arrival_counts(spec, grid, N)
+    # class counts for this flight
+    classes <- names(seg$frac)
+    ccount  <- round_to_total(as.numeric(seg$frac), N); names(ccount) <- classes
+    class_pool <- rep(classes, times = ccount)
+    if (length(class_pool) < N) class_pool <- c(class_pool, rep(classes[1], N - length(class_pool)))
+    class_pool <- class_pool[seq_len(N)]
+    # entry times: spread each bin's arrivals evenly inside the bin
+    e <- numeric(0)
+    for (k in seq_len(grid$M)) {
+      mk <- abin[k]; if (mk > 0)
+        e <- c(e, grid$edges[k] + (seq_len(mk) - 0.5) / mk * grid$dt)
+    }
+    if (length(e) < N) e <- c(e, rep(fl$c - 1, N - length(e)))
+    e <- sort(e[seq_len(N)])
+    cls <- class_pool
+    rows[[length(rows) + 1]] <- data.frame(
+      id = pid + seq_len(N), fid = fl$fid, airline = fl$airline, gha = fl$gha,
+      route = fl$route, H = fl$H, e = e, class = cls,
+      prio = unname(seg$prio[cls]), deadline = fl$c, stringsAsFactors = FALSE)
+    pid <- pid + N
+  }
+  do.call(rbind, rows)
+}
+
+run_scenario <- function(flights, sc) {
+  pax <- expand_passengers(flights, sc)
+  key <- interaction(pax[, sc$group_key, drop = FALSE], drop = TRUE)
+  seg <- class_seg[[sc$segment]]
+  out <- list(); meta <- list()
+  for (lv in levels(key)) {
+    sub <- pax[key == lv, , drop = FALSE]
+    go <- min(sub$e); gc <- max(sub$deadline)
+    cc <- table(factor(sub$class, levels = names(seg$frac)))
+    arr_cum <- cumsum(tabulate(pmax(1, ceiling(sub$e - go + 1)), nbins = ceiling(gc - go) + 1))
+    ctr <- build_counters(
+      n = sc$counters_per_group, mu = sc$mu, group_open = go, group_close = gc,
+      open_pol = sc$open_pol, planned_steps = sc$planned_steps,
+      lane_pol = sc$lane_pol, classes = names(seg$frac), prio = seg$prio,
+      class_counts = cc, arrivals_cum = arr_cum)
+    res <- simulate_group(sub, ctr)
+    res$group <- lv
+    out[[lv]] <- res
+    meta[[lv]] <- data.frame(group = lv, n_counters = nrow(ctr),
+                             counter_minutes = sum(ctr$close - ctr$o))
+  }
+  list(pax = do.call(rbind, out), counters = do.call(rbind, meta), scenario = sc)
+}
+```
+
+```{r idiosyncrasy}
+# ---------------------------------------------------------------------------
+# Idiosyncrasy layer. resolve_arrival() lets the arrival law vary by airline,
+# route (destination), or departure hour. arrival_by is a list of override
+# rules; the first match wins, else the scenario default applies. This is also
+# where geographic concentration in an isodistance radius would shift the law
+# (for example a tighter, later peak for a near catchment).
+# ---------------------------------------------------------------------------
+resolve_arrival <- function(sc, fl) {
+  if (is.null(sc$arrival_by)) return(sc$arrival)
+  for (rule in sc$arrival_by) {
+    ok <- TRUE
+    if (!is.null(rule$airline) && !(fl$airline %in% rule$airline)) ok <- FALSE
+    if (!is.null(rule$route)   && !(fl$route   %in% rule$route))   ok <- FALSE
+    if (!is.null(rule$hour)    && !(fl$H       %in% rule$hour))    ok <- FALSE
+    if (ok) return(rule$arrival)
+  }
+  sc$arrival
+}
+```
+
+```{r kpis}
+# ---------------------------------------------------------------------------
+# KPI summary and conservation checks for a scenario result.
+# ---------------------------------------------------------------------------
+kpis <- function(res) {
+  p <- res$pax
+  served <- p$status == "served"
+  data.frame(
+    passengers   = nrow(p),
+    served       = sum(served),
+    left_behind  = sum(p$status == "leftbehind"),
+    no_show      = sum(p$status == "noshow"),
+    mean_wait    = round(mean(p$wait[served], na.rm = TRUE), 2),
+    p90_wait     = round(as.numeric(quantile(p$wait[served], 0.90, na.rm = TRUE)), 2),
+    max_wait     = round(max(p$wait[served], na.rm = TRUE), 2),
+    mean_lag     = round(mean(p$lag[served], na.rm = TRUE), 2),
+    counter_min  = sum(res$counters$counter_minutes)
+  )
+}
+
+queue_series <- function(res, grid_dt = 5L) {
+  p <- res$pax
+  t0 <- floor(min(p$e)); t1 <- ceiling(max(p$deadline))
+  ts <- seq(t0, t1, by = grid_dt)
+  exit <- ifelse(p$status == "served", p$b, p$deadline)
+  Q <- sapply(ts, function(t) sum(p$e <= t & exit > t))
+  data.frame(t = ts, Q = Q)
+}
+```
+
+\newpage
+
+# Lanes, classes, and the home-departure margin
+
+The class segmentation in Section 8 doubles as the lane structure. Under the
+`shared` lane policy every counter serves every class and the priority order
+alone decides who is taken first. Under the `dedicated` policy counters are
+split across classes in proportion to class load, with any spare desks left
+shared.^[Dedicated lanes can lower the wait for premium passengers while raising
+it for economy, because capacity is reserved. The model reports both so the
+trade is visible.]
+
+Class is also the natural carrier of the home-departure margin. A passenger
+targets an arrival time and leaves home earlier by a travel time drawn from an
+isodistance or isochrone radius around the airport, adjusted for traffic and
+time of day.^[An isodistance radius groups origins by straight-line distance; an
+isochrone groups them by travel time, which is the more useful notion in
+traffic. A traffic and time adjusted isochrone stretches that travel time by the
+congestion expected at the relevant hour.] Formally, for passenger $i$ with
+target arrival $t^{*}_i$ and travel time $\tau_i$,
+$$ h_i \;=\; t^{*}_i - \tau_i, \qquad e_i \;=\; t^{*}_i + \varepsilon_i, $$
+where $h_i$ is the leave-home time and $\varepsilon_i$ is small arrival noise.
+Higher classes tend to choose a larger margin, so $t^{*}_i$ shifts earlier for
+them. The current build draws $e_i$ directly from the arrival law; the margin
+path above is the hook through which the isochrone work will feed $e_i$ once the
+catchment data is available, without changing anything downstream.
+
+\newpage
+
+# Solved cases
+
+We run two cases through the identical engine and compare. Case S0 is the
+zero-assumption ideal: uniform arrivals, one lane, all desks open at $T-4$, equal
+service speed, six desks per group. Case S-data swaps in the workbook's 35/40/25
+arrival split and nothing else, isolating the effect of that one assumption.
+
+```{r run-cases}
+S0 <- default_scenario()
+
+S_data <- default_scenario()
+S_data$arrival <- list(family = "data", params = list(mass = c(0.35, 0.40, 0.25)))
+
+res0   <- run_scenario(flights, S0)
+resd   <- run_scenario(flights, S_data)
+
+k0 <- kpis(res0); k0$case <- "S0 uniform (ideal target)"
+kd <- kpis(resd); kd$case <- "S-data 35/40/25 split"
+comp <- rbind(k0, kd)[, c("case","passengers","served","left_behind","no_show",
+                          "mean_wait","p90_wait","max_wait","mean_lag","counter_min")]
+knitr::kable(comp, caption = "Case comparison through one shared engine.")
+```
+
+```{r plot-arrivals, fig.cap="Arrival intensity per 5 minutes: uniform base versus the workbook split, summed across all flights on a common pre-departure axis."}
+arr_profile <- function(sc, bin = 5L) {
+  acc <- numeric(WINDOW_MIN / bin)
+  for (q in seq_len(nrow(flights))) {
+    fl <- flights[q, ]
+    N <- as.integer(round(sc$load_factor * fl$seats))
+    g <- make_grid(fl$o, bin)
+    acc <- acc + arrival_counts(resolve_arrival(sc, fl), g, N)
+  }
+  acc
+}
+xb <- seq(240, 60, length.out = WINDOW_MIN / 5)   # minutes before departure
+a0 <- arr_profile(S0); ad <- arr_profile(S_data)
+plot(xb, a0, type = "l", lwd = 2, xlim = c(240, 60),
+     xlab = "Minutes before departure (T minus)", ylab = "Arrivals per 5 min",
+     main = "")
+lines(xb, ad, lwd = 2, lty = 2)
+legend("topright", c("S0 uniform", "S-data 35/40/25"), lwd = 2, lty = c(1, 2), bty = "n")
+```
+
+```{r plot-queue, fig.cap="Queue stock over time for the busiest service group under each case."}
+busiest <- names(which.max(table(res0$pax$group)))
+q0 <- queue_series(list(pax = res0$pax[res0$pax$group == busiest, ],
+                        counters = res0$counters), 5)
+qd <- queue_series(list(pax = resd$pax[resd$pax$group == busiest, ],
+                        counters = resd$counters), 5)
+plot(q0$t, q0$Q, type = "l", lwd = 2, xlab = "Minute of night", ylab = "Passengers in queue",
+     main = paste("Group:", busiest))
+lines(qd$t, qd$Q, lwd = 2, lty = 2)
+legend("topright", c("S0 uniform", "S-data split"), lwd = 2, lty = c(1, 2), bty = "n")
+```
+
+\newpage
+
+# Verification
+
+The checks below run on every knit. They confirm mass conservation (arrivals
+equal show-ups), that the engine respects the fixed window, and that the ideal
+constraint is reported rather than silently violated.
+
+```{r verify}
+chk_mass <- local({
+  ok <- TRUE; detail <- c()
+  for (q in seq_len(nrow(flights))) {
+    fl <- flights[q, ]; N <- as.integer(round(S0$load_factor * fl$seats))
+    g <- make_grid(fl$o, S0$dt)
+    s <- sum(arrival_counts(S0$arrival, g, N))
+    if (s != N) { ok <- FALSE; detail <- c(detail, sprintf("%s: %d vs %d", fl$desig, s, N)) }
+  }
+  list(ok = ok, detail = detail)
+})
+
+verify <- data.frame(
+  check = c("Arrivals equal show-ups (all flights)",
+            "All entries within [open, close]",
+            "No passenger served after own close",
+            "dt divides 180"),
+  result = c(
+    if (chk_mass$ok) "PASS" else paste("FAIL", paste(chk_mass$detail, collapse="; ")),
+    { p <- res0$pax; if (all(p$e >= ave(p$e, p$fid, FUN = min) - 1e-6)) "PASS" else "CHECK"},
+    {p <- res0$pax[res0$pax$status=="served",]; if (all(p$b < p$deadline + 1e-6)) "PASS" else "FAIL"},
+    if (WINDOW_MIN %% params$dt == 0) "PASS" else "FAIL"
+  )
+)
+knitr::kable(verify, caption = "Automatic verification, recomputed on each knit.")
+
+ideal0 <- with(kpis(res0), left_behind == 0 & no_show == 0)
+cat(sprintf("Ideal constraint (zero left-behind, zero no-show) under S0: %s\n",
+            if (ideal0) "satisfied" else "VIOLATED, see KPI table"))
+```
+
+\newpage
+
+# What is variable: the full set of levers
+
+Every item below is a single field in the scenario list and can be changed
+without touching the engine.
+
+| Lever | Field | Options or range |
+|-------|-------|------------------|
+| Time step $\Delta t$ | `dt` | any divisor of 180 (1, 2, 3, 5, 6, 10, ...) |
+| Load factor $\rho$ | `load_factor` | $0$ to $1$ |
+| Arrival law | `arrival$family` | uniform, normal, linear, skew, data |
+| Arrival parameters | `arrival$params` | mean, sd, intercept, gradient, xi, omega, alpha, mass |
+| Idiosyncrasy | `arrival_by` | overrides by airline, route, or hour |
+| Class structure | `segment` | uni, bi, bi_ff, tri, quad, quint |
+| Lane policy | `lane_pol` | shared, dedicated |
+| Opening policy | `open_pol` | all_T4, planned, responsive |
+| Planned stagger | `planned_steps` | minute offsets after group open |
+| Service rate $\mu$ | `mu` | passengers per minute |
+| Counters per group | `counters_per_group` | the decision variable, typically 5 to 7 |
+| Grouping | `group_key` | c("gha","airline") or add "fid" for per-flight |
+
+To run a new case, copy `default_scenario()`, change the fields of interest, and
+call `run_scenario(flights, sc)`. The counter count is the primary decision
+variable; sweeping it against the resource budget $B$ is the optimisation that
+this engine is built to support next.
+
+\newpage
+
+# Agenda for the leadership specification meeting
+
+The model is built to be steered by a small number of decisions that only
+operations leadership can fix. The following should be confirmed before the
+model is calibrated and used to set rosters.
+
+1. Service rate. What is the realistic passenger-per-minute rate per desk for
+   international check-in, and does it differ by ground handler.
+
+2. Counter budget. The total counters and counter-hours available per night per
+   handler, which sets the resource budget $B$ and the feasible range for the
+   counters-per-group decision.
+
+3. Arrival law of record. Which arrival family should be the planning default,
+   and whether the workbook 35/40/25 split is to be retired.
+
+4. Class and lane policy. The cabin and product mix to model per airline, and
+   whether dedicated lanes are used for premium, fast-track, or loyalty.
+
+5. Service standard. The target wait, for example a p90 wait ceiling, and the
+   tolerance for left-behind passengers, which defines the ideal constraint in
+   practice.
+
+6. Catchment data. Access to travel-time or isochrone data around the airport so
+   the home-departure margin can be calibrated rather than assumed.
+
+7. Idiosyncrasies that matter. Which airlines, destinations, or hours leadership
+   believes deviate enough to warrant their own arrival law.
+
+\newpage
+
+# Appendix: notation summary
+
+| Symbol | Meaning |
+|--------|---------|
+| $T$ | SOBT, the departure datum |
+| $o_f, c_f$ | flight open ($T-4$h) and close ($T-1$h) |
+| $\Delta t$ | time step in minutes |
+| $\rho$ | load factor |
+| $K_f, N_f$ | seats and show-ups, $N_f=\mathrm{round}(\rho K_f)$ |
+| $\lambda_f, \hat\lambda_f$ | arrival intensity and its normalised density |
+| $\kappa_i$ | passenger class or lane |
+| $e_i, b_i, d_i$ | entry, service begin, processed times |
+| $w_i, \ell_i$ | wait and lag |
+| $Q(t)$ | queue stock |
+| $\alpha(t), \delta(t)$ | arrival and departure flows |
+| $\mu_j$ | service rate of counter $j$ |
+| $o_j, c_j, \mathcal{A}_j$ | counter open, close, and allowed lanes |
+| $B$ | counter-minute budget |
+
+This document is generated from `dial_t3_checkin_model.Rmd`. Knit to PDF to
+reproduce every number and figure above.

@@ -1,0 +1,36 @@
+---
+title: "Caching Checks-in"
+output: pdf_document
+---
+
+```{r table, echo=FALSE, message=FALSE, warning=FALSE}
+flights <- read.table(
+  text = "Flight|SOBT|Capacity
+AI 173|0:05|288
+AI 312|0:05|259
+VJ 972|0:05|377
+AI 187|0:10|328
+AI 161|0:30|316
+AI 2336|0:30|164
+AF 283|0:40|188
+AI 302|0:55|328
+AI 277|1:00|259
+LX 147|1:05|182
+CX 694|1:10|236
+KC 964|1:10|280
+AI 308|1:15|179
+AI 2390|1:20|164
+AI 2378|1:25|164
+BA 142|1:35|272
+LX 2647|1:40|235
+LH 763|1:45|509
+AI 4307|2:00|259
+VS 303|2:05|397
+ET 687|2:30|315
+6E 033|2:40|318
+LH 761|2:50|287
+AI 2147|2:55|188",
+  header = TRUE, sep = "|", check.names = FALSE, strip.white = TRUE)
+
+knitr::kable(flights)
+```

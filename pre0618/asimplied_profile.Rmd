@@ -1,0 +1,99 @@
+---
+title: "asimplied.csv --- Descriptive Statistics"
+subtitle: "DEL International Departures, 21 June 2026"
+date: "Generated 19 June 2026"
+output:
+  pdf_document:
+    latex_engine: xelatex
+    toc: true
+    toc_depth: 2
+    number_sections: true
+geometry: margin=1in
+fontsize: 11pt
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE)
+options(knitr.kable.NA = "")
+library(knitr)
+
+path <- "C:/Users/yashm/OneDrive - Cornell University/Desktop/Work/Delhi International Airport Limited/Pax_Forecast_Model/asimplied.csv"
+df <- read.csv(path, stringsAsFactors = TRUE, check.names = FALSE)
+
+clean <- function(s) gsub("_", " ", s)   # tidy underscored field names for display
+```
+
+# Overview
+
+This report profiles every column of `asimplied.csv`, the Day-7 international
+departures schedule for Delhi (DEL) on 21 June 2026. The dataset contains
+**`r nrow(df)` flights** (rows) across **`r ncol(df)` fields** (columns).
+
+```{r overview}
+ov <- data.frame(
+  Field    = names(df),
+  Type     = sapply(df, function(x) if (is.numeric(x)) "numeric" else "categorical"),
+  Distinct = sapply(df, function(x) length(unique(x[!is.na(x)]))),
+  Missing  = sapply(df, function(x) sum(is.na(x))),
+  row.names = NULL
+)
+kable(ov, format = "latex", row.names = FALSE,
+      col.names = c("Field", "Type", "Distinct values", "Missing"))
+```
+
+# Numeric Summary: Seats
+
+Seats is the only numeric measure in the schedule. `r sum(!is.na(df$Seats))` of
+`r nrow(df)` flights report a seat count (one value is missing).
+
+```{r seats}
+s <- df$Seats
+seats_tbl <- data.frame(
+  Statistic = c("Flights with data", "Missing", "Mean", "Median",
+                "Std. deviation", "Minimum", "25th percentile",
+                "75th percentile", "Maximum", "Total seats (all flights)"),
+  Value = c(
+    format(sum(!is.na(s))),
+    format(sum(is.na(s))),
+    format(round(mean(s, na.rm = TRUE), 1)),
+    format(median(s, na.rm = TRUE)),
+    format(round(sd(s, na.rm = TRUE), 1)),
+    format(min(s, na.rm = TRUE)),
+    format(quantile(s, 0.25, na.rm = TRUE)),
+    format(quantile(s, 0.75, na.rm = TRUE)),
+    format(max(s, na.rm = TRUE)),
+    formatC(sum(s, na.rm = TRUE), format = "d", big.mark = ",")
+  )
+)
+kable(seats_tbl, format = "latex", row.names = FALSE,
+      col.names = c("Statistic", "Value"))
+```
+
+# Categorical Frequencies
+
+For each categorical field the most common values are listed (top 15 where a
+field has more than 15 distinct values). Share is the percentage of all 165
+flights.
+
+```{r cats, results='asis'}
+cat_cols <- c("Airline code", "Traffic Type", "Public Terminal", "GHA",
+              "Routing", "dest_iata", "dest_city", "dest_country",
+              "airline_name", "airline_country")
+for (col in cat_cols) {
+  tb    <- sort(table(df[[col]]), decreasing = TRUE)
+  n_lvl <- length(tb)
+  top   <- head(tb, 15)
+  d <- data.frame(
+    Value = names(top),
+    Count = as.integer(top),
+    Share = paste0(formatC(100 * as.integer(top) / sum(tb),
+                           format = "f", digits = 1), "%")
+  )
+  cat("\n\n## ", clean(col), " (", n_lvl, " distinct)\n\n", sep = "")
+  tab <- kable(d, format = "latex", row.names = FALSE,
+               col.names = c(clean(col), "Count", "Share"))
+  cat(tab, sep = "\n")
+  if (n_lvl > 15) cat("\n\n*Top 15 of ", n_lvl, " levels shown.*", sep = "")
+  cat("\n\n")
+}
+```
