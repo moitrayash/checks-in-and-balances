@@ -1,0 +1,123 @@
+---
+output:
+  pdf_document:
+    latex_engine: xelatex
+    toc: false
+mainfont: "Latin Modern Roman"
+sansfont: "Latin Modern Sans"
+header-includes:
+  - \usepackage{graphicx}
+  - \usepackage{xcolor}
+  - \usepackage{tikz}
+  - \usepackage{float}
+  - \usepackage{caption}
+  - \usepackage{fancyhdr}
+  - \usepackage{lastpage}
+  - \IfFontExistsTF{Calibri}{\newfontfamily\calibrifont{Calibri}}{\IfFontExistsTF{Carlito}{\newfontfamily\calibrifont{Carlito}}{\let\calibrifont\sffamily}}
+  - \pagestyle{fancy}
+  - \fancyhf{}
+  - \renewcommand{\headrulewidth}{0pt}
+  - \renewcommand{\footrulewidth}{0.4pt}
+  - \fancyfoot[L]{\footnotesize Moitra, Yash}
+  - \fancyfoot[C]{\footnotesize \thepage\ / \pageref{LastPage}}
+  - \fancyfoot[R]{\footnotesize{\calibrifont June 2026}}
+---
+
+```{r setup, include=FALSE}
+library(knitr); knitr::opts_chunk$set(echo = FALSE)
+raw <- read.csv("asimplied.csv", check.names = FALSE, stringsAsFactors = FALSE)
+dep <- format(strptime(raw$SOBT, "%d-%m-%Y %H:%M"), "%H%M")
+corpus <- data.frame(flight=raw[["Flight Designator"]], n=raw[["S.no"]], route=raw[["Routing"]],
+                     dest=raw[["dest_iata"]], cap=raw[["Seats"]], dep=dep,
+                     code=trimws(raw[["Airline code"]]), gha=trimws(raw[["GHA"]]), stringsAsFactors=FALSE)
+corpus <- corpus[order(corpus$n), ]
+LF <- 1
+depmin <- as.integer(substr(corpus$dep,1,2))*60L + as.integer(substr(corpus$dep,3,4))
+YMAX <- 800
+EMEAN <- 120.0; TLO <- -149.9; THI <- 233.0
+fden <- function(t) (2/98.22)*dnorm((t-197.76)/98.22)*pnorm(-8*((t-197.76)/98.22))
+gfl  <- function(tau, D, cp) cp*10*LF*( fden(D-tau) + fden(D-tau-1440) + fden(D-tau+1440) )
+hhmm <- function(m){ m <- ((round(m) %% 1440) + 1440) %% 1440; sprintf("%02d%02d", m %/% 60L, m %% 60L) }
+xlab1 <- function(v) if (v == 1440) "2400" else hhmm(v)
+
+# airline colours
+fixed_col <- c(AI="#D62728", `6E`="#2E2E9E", QP="#F57C00", UA="#4F9FE0")
+ord <- names(sort(tapply(depmin, corpus$code, median)))
+airline_col <- setNames(character(length(ord)), ord); gi <- 0L
+for (a in ord){ if (a %in% names(fixed_col)){ airline_col[a] <- fixed_col[[a]] } else { h <- (47+gi*137.508)%%360; airline_col[a] <- hsv(h/360,0.65,0.70); gi <- gi+1L } }
+air_name <- setNames(sprintf("airc%d", seq_along(ord)), ord)
+rank_air <- names(sort(tapply(corpus$cap, corpus$code, sum), decreasing=TRUE)); LEG_CAP <- 20L
+emit_air_defs <- function() for (a in names(air_name)) cat(sprintf("\\definecolor{%s}{HTML}{%s}\n", air_name[[a]], toupper(substr(airline_col[[a]],2,7))))
+legend_air <- function(){ show <- rank_air[seq_len(min(length(rank_air),LEG_CAP))]
+  cat("\\par\\vspace{3pt}{\\centering\\scriptsize\n")
+  cat(paste(sprintf("\\textcolor{%s}{\\rule[-0.2ex]{1.6ex}{1.6ex}}\\,%s", air_name[show], show), collapse="\\quad{}"))
+  if (length(rank_air)>LEG_CAP) cat(sprintf("\\quad{}(+%d more)", length(rank_air)-LEG_CAP)); cat("\\par}\n") }
+
+# GHA colours
+gha_pal <- c("AISATS"="#2C6FBB","BFS"="#C0392B","Ramp 360"="#27936B","AIESL"="#E08A1E")
+ordg <- names(sort(tapply(depmin, corpus$gha, median)))
+gha_hex <- vapply(ordg, function(g) if (g %in% names(gha_pal)) gha_pal[[g]] else "#666666", "")
+names(gha_hex) <- ordg; gha_name <- setNames(sprintf("ghac%d", seq_along(ordg)), ordg)
+rank_gha <- names(sort(tapply(corpus$cap, corpus$gha, sum), decreasing=TRUE))
+emit_gha_defs <- function() for (g in names(gha_name)) cat(sprintf("\\definecolor{%s}{HTML}{%s}\n", gha_name[[g]], toupper(substr(gha_hex[[g]],2,7))))
+legend_gha <- function(){ show <- rank_gha
+  cat("\\par\\vspace{3pt}{\\centering\\scriptsize\n")
+  cat(paste(sprintf("\\textcolor{%s}{\\rule[-0.2ex]{1.6ex}{1.6ex}}\\,%s", gha_name[show], show), collapse="\\quad{}")); cat("\\par}\n") }
+legend_txt <- function(txt) cat("\\par\\vspace{3pt}{\\centering\\scriptsize \\textcolor{black}{\\rule[0.35ex]{2.6ex}{1.1pt}}\\,", txt, "\\par}\n", sep="")
+
+draw_axes <- function(x0,x1,Wcm,Hcm,ymax,ystep,xticks,xlabs){
+  sx <- Wcm/(x1-x0); sy <- Hcm/ymax
+  cat(sprintf("\\draw[->] (0,0) -- (%.3f,0);\n", Wcm+0.4))
+  cat(sprintf("\\draw[->] (0,0) -- (0,%.3f);\n", Hcm+0.4))
+  for (v in seq(0,ymax,ystep)){ yy <- v*sy
+    cat(sprintf("\\draw (-0.07,%.3f) -- (0.07,%.3f);\n", yy, yy))
+    cat(sprintf("\\node[left,font=\\footnotesize] at (-0.10,%.3f) {%d};\n", yy, as.integer(v))) }
+  for (k in seq_along(xticks)){ xx <- (xticks[k]-x0)*Wcm/(x1-x0)
+    cat(sprintf("\\draw (%.3f,-0.07) -- (%.3f,0.07);\n", xx, xx))
+    cat(sprintf("\\node[below,font=\\footnotesize] at (%.3f,-0.07) {%s};\n", xx, xlabs[k])) }
+}
+```
+
+```{=latex}
+\begin{titlepage}
+\thispagestyle{empty}
+\noindent{\calibrifont\bfseries\footnotesize June 23, 2026}\par
+\vspace*{6cm}
+\noindent{\LARGE\bfseries Checks-in, and Balances: a Matter of Time\par}
+\vspace{2mm}
+\noindent{\footnotesize\bfseries SL33 entry density: stacked by GHA\par}
+\vspace{5mm}
+\noindent{\itshape Yash Moitra\textsuperscript{\textdagger}\par}
+\vfill
+\noindent{\footnotesize \textsuperscript{\textdagger}\,Delhi International Airport Limited.\par}
+\end{titlepage}
+\pagenumbering{arabic}
+```
+
+```{r v, results='asis'}
+panel <- function(W0,W1,lab){
+  span <- W1-W0; xstep <- if (span<=480) 60L else if (span<=720) 120L else 180L
+  Wcm <- 15.5; Hcm <- 7.0; sx <- Wcm/span; sy <- Hcm/YMAX
+  xc <- function(m)(m-W0)*sx; yc <- function(v)v*sy
+  xticks <- seq(W0,W1,by=xstep); xlabs <- vapply(xticks,xlab1,"")
+  cat("\\begin{figure}[H]\n\\centering\n\\begin{tikzpicture}\n")
+  draw_axes(W0,W1,Wcm,Hcm,YMAX,100,xticks,xlabs)
+  gstep <- max(1L, as.integer(round(span/240))); grid <- seq(W0,W1,by=gstep)
+  for (g in ordg) {
+    idx <- which(corpus$gha==g); if (length(idx)==0) next
+    S <- rep(0,length(grid)); for (j in idx) S <- S + gfl(grid, depmin[j], corpus$cap[j])
+    S <- pmin(S,YMAX); if (max(S)<0.5) next
+    col <- "black"
+    pts <- paste(sprintf("(%.3f,%.3f)",xc(grid),yc(S)),collapse=" ")
+    cat(sprintf("\\draw[color=%s,opacity=0.8,line width=0.6pt] plot coordinates {%s};\n", col, pts))
+  }
+  cat("\\end{tikzpicture}\n")
+  legend_txt("SL33, one ground handler (flights summed)")
+  cat(sprintf("\\caption{SL33 stacked entry-time load by GHA, %s.}\n", lab))
+  cat("\\end{figure}\n\\clearpage\n")
+}
+for (k in 0:5) panel(k*240L,(k+1)*240L, sprintf("%s to %s (4 h window)", hhmm(k*240L), xlab1((k+1)*240L)))
+for (k in 0:2) panel(k*480L,(k+1)*480L, sprintf("%s to %s (8 h window)", hhmm(k*480L), xlab1((k+1)*480L)))
+for (k in 0:1) panel(k*720L,(k+1)*720L, sprintf("%s to %s (12 h window)", hhmm(k*720L), xlab1((k+1)*720L)))
+panel(0L,1440L,"0000 to 2400 (24 h, full day)")
+```
