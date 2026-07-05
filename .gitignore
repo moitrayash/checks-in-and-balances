@@ -3,3 +3,6 @@
 .DS_Store
 Thumbs.db
 *.log
+
+# Redundant archive: byte-identical to original photos/ (see pre0618/README.md)
+pre0618/Photos-3-001.zip
