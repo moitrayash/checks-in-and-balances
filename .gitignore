@@ -6,3 +6,6 @@ Thumbs.db
 
 # Redundant archive: byte-identical to original photos/ (see pre0618/README.md)
 pre0618/Photos-3-001.zip
+
+# seats.xlsx travels as split parts; the rejoined file stays local
+seats.xlsx
