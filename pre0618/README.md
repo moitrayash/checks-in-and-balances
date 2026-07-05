@@ -11,5 +11,6 @@ Nothing here feeds the current model directly; the current pipeline starts from
 Contents: the original `Foundation Schedule.xlsx` and its rebuilt variant,
 `Pax Arrival Times.xlsx` (the earlier arrival-time working), the `T3 Checkin Model/`
 prototype (R Markdown), early build scripts (`build2.py`, `build_asreceived.py`,
-`buildfull.py`, `asimplied_profile.R/.Rmd`), interim data (`df1.csv`, `_data.json`),
-and photograph archives (`Photos-3-001.zip`).
+`buildfull.py`, `asimplied_profile.R/.Rmd`), and interim data (`df1.csv`, `_data.json`). The photograph archive `Photos-3-001.zip`
+(present in the working folder) is not carried in the repository: it contains byte-identical
+copies of the five photographs already published in `../original photos/`.
