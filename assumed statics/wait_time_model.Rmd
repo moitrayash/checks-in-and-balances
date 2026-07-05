@@ -1,0 +1,81 @@
+---
+title: "Check-in Wait Time and Counter Allocation"
+author: "Yash Moitra^[Delhi International Airport Limited]"
+date: "June 30, 2026"
+output:
+  pdf_document:
+    number_sections: true
+    latex_engine: xelatex
+    toc: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, collapse = TRUE)
+```
+
+# Single-desk FIFO wait
+
+One counter serves a queue first-in-first-out at constant service time $t$ minutes per
+passenger. Order the queue by arrival $a_1 \le a_2 \le \dots$. Then
+
+$$s_i = \max(a_i,\, d_{i-1}), \qquad d_i = s_i + t, \qquad w_i = s_i - a_i = \max(0,\, d_{i-1}-a_i).$$
+
+The processed (departure) time is $d_i = a_i + w_i + t$, which is the "entry + wait + t"
+cell placed next to each entry. Three equivalent forms:
+
+- Increment (Lindley): $w_i = \max\!\big(0,\, w_{i-1} + t - (a_i - a_{i-1})\big)$.
+- Closed form: $w_i = \max_{0 \le j \le i-1}\big( j\,t - (a_i - a_{i-j}) \big)$.
+- Elapsed (residual) form: $w_i = L_i\, t - e_i$, with $L_i$ ahead in system and $e_i$ the
+  service already elapsed on the passenger in service.
+
+```{r engine}
+fifo <- function(a, t) {
+  a <- sort(a); n <- length(a); d <- numeric(n); w <- numeric(n); prev <- -Inf
+  for (i in seq_len(n)) {
+    s <- if (i == 1) a[i] else max(a[i], prev)
+    d[i] <- s + t; w[i] <- s - a[i]; prev <- d[i]
+  }
+  list(wait = w, processed = d)
+}
+```
+
+# Correction to the hand worksheet
+
+For arrivals at minutes $0, 1, 2$ with $t$ between 60 and 120 seconds, the third
+passenger's wait is $2t-2$, not $(t-1)+(t-2)=2t-3$. The second stacked term is measured
+from the predecessor's completion, $t - \text{gap} = t-1$, giving $(t-1)+(t-1)=2t-2$.
+
+```{r correction}
+fifo(c(0, 1, 2), t = 1.5)$wait   # 0.0, 0.5, 1.0  (not 0.0, 0.5, 0.0)
+```
+
+# Multiple counters
+
+With $c$ identical counters, FIFO, constant $t$, passenger $i$ reuses the counter that
+served passenger $i-c$:
+$$d_i = \max(a_i,\, d_{i-c}) + t,$$
+so the system splits into $c$ interleaved single-counter queues (passengers
+$i, i+c, i+2c, \dots$). The single-desk engine above therefore computes the $c$-counter
+waits exactly.
+
+# Service regimes
+
+$t = 200$ s $= 10/3$ min (18 per counter per hour), and $t = 180$ s $= 3$ min.
+
+# Counter allocation rule
+
+A counter clears $N = \text{target}/t$ passengers within the target window. At each minute
+$m$, the desks required for a group are
+$$D(m) = \left\lceil \frac{A_W(m)}{N} \right\rceil,$$
+where $A_W(m)$ is the number of arrivals in the trailing window $(m-\text{target},\, m]$.
+This is the "if passengers per counter exceed $N$, add a counter" rule applied
+continuously, producing a time-varying desk schedule $D(m)$ per group. Solved for targets
+of 20 and 40 minutes, for groupings by flight, by airline, and by GHA, across all 104
+entry-time models. The minimum-counter schedules are in the `schedule_*` files; peaks per
+model are in `allocation_summary`.
+
+# Note
+
+The rule is a sufficient, conservative allocation: realized waits sit below the target
+(for N1 at the 20-minute target, group maxima average roughly 2 to 4 minutes), so the true
+minimum peak is at or below the reported figures. See `Methodology_Counter_Allocation.md`.
