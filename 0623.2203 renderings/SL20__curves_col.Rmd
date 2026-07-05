@@ -1,0 +1,117 @@
+---
+output:
+  pdf_document:
+    latex_engine: xelatex
+    toc: false
+mainfont: "Latin Modern Roman"
+sansfont: "Latin Modern Sans"
+header-includes:
+  - \usepackage{graphicx}
+  - \usepackage{xcolor}
+  - \usepackage{tikz}
+  - \usepackage{float}
+  - \usepackage{caption}
+  - \usepackage{fancyhdr}
+  - \usepackage{lastpage}
+  - \IfFontExistsTF{Calibri}{\newfontfamily\calibrifont{Calibri}}{\IfFontExistsTF{Carlito}{\newfontfamily\calibrifont{Carlito}}{\let\calibrifont\sffamily}}
+  - \pagestyle{fancy}
+  - \fancyhf{}
+  - \renewcommand{\headrulewidth}{0pt}
+  - \renewcommand{\footrulewidth}{0.4pt}
+  - \fancyfoot[L]{\footnotesize Moitra, Yash}
+  - \fancyfoot[C]{\footnotesize \thepage\ / \pageref{LastPage}}
+  - \fancyfoot[R]{\footnotesize{\calibrifont June 2026}}
+---
+
+```{r setup, include=FALSE}
+library(knitr); knitr::opts_chunk$set(echo = FALSE)
+raw <- read.csv("asimplied.csv", check.names = FALSE, stringsAsFactors = FALSE)
+dep <- format(strptime(raw$SOBT, "%d-%m-%Y %H:%M"), "%H%M")
+corpus <- data.frame(flight=raw[["Flight Designator"]], n=raw[["S.no"]], route=raw[["Routing"]],
+                     dest=raw[["dest_iata"]], cap=raw[["Seats"]], dep=dep,
+                     code=trimws(raw[["Airline code"]]), gha=trimws(raw[["GHA"]]), stringsAsFactors=FALSE)
+corpus <- corpus[order(corpus$n), ]
+LF <- 1
+depmin <- as.integer(substr(corpus$dep,1,2))*60L + as.integer(substr(corpus$dep,3,4))
+YMAX <- 600
+EMEAN <- 120.0; TLO <- -144.3; THI <- 260.7
+fden <- function(t) (2/94.77)*dnorm((t-193.36)/94.77)*pnorm(-4*((t-193.36)/94.77))
+gfl  <- function(tau, D, cp) cp*10*LF*( fden(D-tau) + fden(D-tau-1440) + fden(D-tau+1440) )
+hhmm <- function(m){ m <- ((round(m) %% 1440) + 1440) %% 1440; sprintf("%02d%02d", m %/% 60L, m %% 60L) }
+xlab1 <- function(v) if (v == 1440) "2400" else hhmm(v)
+
+# airline colours
+fixed_col <- c(AI="#D62728", `6E`="#2E2E9E", QP="#F57C00", UA="#4F9FE0")
+ord <- names(sort(tapply(depmin, corpus$code, median)))
+airline_col <- setNames(character(length(ord)), ord); gi <- 0L
+for (a in ord){ if (a %in% names(fixed_col)){ airline_col[a] <- fixed_col[[a]] } else { h <- (47+gi*137.508)%%360; airline_col[a] <- hsv(h/360,0.65,0.70); gi <- gi+1L } }
+air_name <- setNames(sprintf("airc%d", seq_along(ord)), ord)
+rank_air <- names(sort(tapply(corpus$cap, corpus$code, sum), decreasing=TRUE)); LEG_CAP <- 20L
+emit_air_defs <- function() for (a in names(air_name)) cat(sprintf("\\definecolor{%s}{HTML}{%s}\n", air_name[[a]], toupper(substr(airline_col[[a]],2,7))))
+legend_air <- function(){ show <- rank_air[seq_len(min(length(rank_air),LEG_CAP))]
+  cat("\\par\\vspace{3pt}{\\centering\\scriptsize\n")
+  cat(paste(sprintf("\\textcolor{%s}{\\rule[-0.2ex]{1.6ex}{1.6ex}}\\,%s", air_name[show], show), collapse="\\quad{}"))
+  if (length(rank_air)>LEG_CAP) cat(sprintf("\\quad{}(+%d more)", length(rank_air)-LEG_CAP)); cat("\\par}\n") }
+
+# GHA colours
+gha_pal <- c("AISATS"="#2C6FBB","BFS"="#C0392B","Ramp 360"="#27936B","AIESL"="#E08A1E")
+ordg <- names(sort(tapply(depmin, corpus$gha, median)))
+gha_hex <- vapply(ordg, function(g) if (g %in% names(gha_pal)) gha_pal[[g]] else "#666666", "")
+names(gha_hex) <- ordg; gha_name <- setNames(sprintf("ghac%d", seq_along(ordg)), ordg)
+rank_gha <- names(sort(tapply(corpus$cap, corpus$gha, sum), decreasing=TRUE))
+emit_gha_defs <- function() for (g in names(gha_name)) cat(sprintf("\\definecolor{%s}{HTML}{%s}\n", gha_name[[g]], toupper(substr(gha_hex[[g]],2,7))))
+legend_gha <- function(){ show <- rank_gha
+  cat("\\par\\vspace{3pt}{\\centering\\scriptsize\n")
+  cat(paste(sprintf("\\textcolor{%s}{\\rule[-0.2ex]{1.6ex}{1.6ex}}\\,%s", gha_name[show], show), collapse="\\quad{}")); cat("\\par}\n") }
+legend_txt <- function(txt) cat("\\par\\vspace{3pt}{\\centering\\scriptsize \\textcolor{black}{\\rule[0.35ex]{2.6ex}{1.1pt}}\\,", txt, "\\par}\n", sep="")
+
+draw_axes <- function(x0,x1,Wcm,Hcm,ymax,ystep,xticks,xlabs){
+  sx <- Wcm/(x1-x0); sy <- Hcm/ymax
+  cat(sprintf("\\draw[->] (0,0) -- (%.3f,0);\n", Wcm+0.4))
+  cat(sprintf("\\draw[->] (0,0) -- (0,%.3f);\n", Hcm+0.4))
+  for (v in seq(0,ymax,ystep)){ yy <- v*sy
+    cat(sprintf("\\draw (-0.07,%.3f) -- (0.07,%.3f);\n", yy, yy))
+    cat(sprintf("\\node[left,font=\\footnotesize] at (-0.10,%.3f) {%d};\n", yy, as.integer(v))) }
+  for (k in seq_along(xticks)){ xx <- (xticks[k]-x0)*Wcm/(x1-x0)
+    cat(sprintf("\\draw (%.3f,-0.07) -- (%.3f,0.07);\n", xx, xx))
+    cat(sprintf("\\node[below,font=\\footnotesize] at (%.3f,-0.07) {%s};\n", xx, xlabs[k])) }
+}
+```
+
+```{=latex}
+\begin{titlepage}
+\thispagestyle{empty}
+\noindent{\calibrifont\bfseries\footnotesize June 23, 2026}\par
+\vspace*{6cm}
+\noindent{\LARGE\bfseries Checks-in, and Balances: a Matter of Time\par}
+\vspace{2mm}
+\noindent{\footnotesize\bfseries SL20 entry density: coloured curves (by flight)\par}
+\vspace{5mm}
+\noindent{\itshape Yash Moitra\textsuperscript{\textdagger}\par}
+\vfill
+\noindent{\footnotesize \textsuperscript{\textdagger}\,Delhi International Airport Limited.\par}
+\end{titlepage}
+\pagenumbering{arabic}
+```
+
+```{r v, results='asis'}
+emit_air_defs()
+for (i in seq_len(nrow(corpus))) {
+  D <- depmin[i]; cp <- corpus$cap[i]
+  x0 <- D-THI-10; x1 <- D-TLO+10
+  Wcm <- 12.5; Hcm <- 8.0; sx <- Wcm/(x1-x0); sy <- Hcm/YMAX
+  xc <- function(tau)(tau-x0)*sx; yc <- function(v)v*sy
+  h0 <- ceiling(x0/60); h1 <- floor(x1/60); xticks <- seq(h0*60L,h1*60L,by=60L); xlabs <- vapply(xticks,hhmm,"")
+  grid <- seq(x0,x1,length.out=220); yv <- pmin(gfl(grid,D,cp),YMAX)
+  cat("\\begin{figure}[H]\n\\centering\n\\begin{tikzpicture}\n")
+  draw_axes(x0,x1,Wcm,Hcm,YMAX,100,xticks,xlabs)
+  col <- air_name[[corpus$code[i]]]
+  pts <- paste(sprintf("(%.3f,%.3f)",xc(grid),yc(yv)),collapse=" ")
+  cat(sprintf("\\draw[color=%s,line width=1pt] plot coordinates {%s};\n", col, pts))
+  mt <- D-EMEAN; cat(sprintf("\\draw[dashed,line width=0.7pt] (%.3f,0)--(%.3f,%.3f);\n", xc(mt),xc(mt),yc(min(gfl(mt,D,cp),YMAX))))
+  cat("\\end{tikzpicture}\n")
+  legend_air()
+  cat(sprintf("\\caption{Flight %s (%s), dep %s. SL20 entry-time density.}\n", corpus$flight[i], corpus$route[i], corpus$dep[i]))
+  cat("\\end{figure}\n\\clearpage\n")
+}
+```
