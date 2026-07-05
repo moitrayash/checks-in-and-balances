@@ -249,6 +249,7 @@ document.getElementById('nav').addEventListener('click', e => {
   if (e.target.tagName !== 'BUTTON') return;
   document.querySelectorAll('nav button').forEach(b => b.classList.toggle('on', b === e.target));
   document.querySelectorAll('section.tab').forEach(s => s.classList.toggle('on', s.id === 'tab-' + e.target.dataset.t));
+  requestAnimationFrame(() => { for (const id in Chart.instances) Chart.instances[id].resize(); });
 });
 
 /* ---------- helpers ---------- */
@@ -336,7 +337,7 @@ function drawLab(){
   document.getElementById('mDesc').textContent = modelLabel(m);
   const a = D.alloc[m.k] || {};
   document.getElementById('labSub').textContent =
-    `Peak counters needed under ${m.k} at LF 1 (20-min target): per-flight ${a.fl80t20 ?? '–'} (r180) / ${a.fl00t20 ?? '–'} (r200) vs supply 168.`;
+    `Peak counters needed under ${m.k} at LF 1 (20-min target): per-flight ${a.fl180t20 ?? '–'} (r180) / ${a.fl200t20 ?? '–'} (r200) vs supply 168.`;
   const ds = [{ label:'terminal (all 164 flights)', data:terminalCurve(m, lf, null), borderColor:C.accent,
     backgroundColor:'rgba(35,74,109,.08)', fill:true, pointRadius:0, borderWidth:1.6, tension:.25 }];
   if (fSel.value) ds.push({ label:fSel.value, data:terminalCurve(m, lf, fSel.value), borderColor:C.accent2,
@@ -386,7 +387,7 @@ function drawFeas(){
   D.models.forEach(m => {
     if (fam && m.fam !== fam) return;
     const a = D.alloc[m.k] || {};
-    const cells = ['fl00','fl80','ai00','ai80','gh00','gh80'].map(p => a[p + tgt]);
+    const cells = ['fl200','fl180','ai200','ai180','gh200','gh180'].map(p => a[p + tgt]);
     if (cells[1] <= SUPPLY) feas180++;
     if (only && cells.every(v => v <= SUPPLY)) return;
     shown++;
