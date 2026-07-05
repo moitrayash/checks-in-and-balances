@@ -1,0 +1,13 @@
+grouping,regime,target_min,airport_peak_exact,total_desks_exact
+flight,r200,20,229,1256
+flight,r180,20,207,1135
+flight,r200,40,184,1020
+flight,r180,40,165,919
+airline,r200,20,291,573
+airline,r180,20,257,510
+airline,r200,40,234,463
+airline,r180,40,211,416
+gha,r200,20,160,160
+gha,r180,20,143,143
+gha,r200,40,140,140
+gha,r180,40,126,126
