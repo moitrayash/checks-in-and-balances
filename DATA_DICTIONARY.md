@@ -58,7 +58,7 @@ lambda, Seed). Row 10 holds column names; data start at row 11. Columns A to H a
 SL1 to SL39, SR1 to SR39, hold that model's entry time for the seat, in integer minutes
 before departure at LF = 1 (negative = after midnight relative to departure; Uniform and
 Exponential families live on the window [0, 240]). Sheet `reference` restates the model
-catalogue. Definitions and seeds: `model_equations.md`.
+catalogue. Definitions and seeds: `model_equations.md`. In the Git repository this file is carried as split binary parts; run `python3 rejoin_seats.py` to reconstruct and verify it.
 
 ### model_equations.md / model_equations_filled.md
 

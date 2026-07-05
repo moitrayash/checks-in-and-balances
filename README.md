@@ -98,6 +98,15 @@ Entry-time draws are seeded (seeds recorded per model in `model_equations.md` an
 against their target moments (104 of 104 PASS). Original worksheet photographs are kept in
 `original photos/`.
 
+## Repository packaging note
+
+In the Git repository the 19 MB seat-level master `seats.xlsx` travels as exact binary
+parts (`seats.xlsx.part-00.bin` to `-03.bin`) because of a transfer-size limit in the
+publication pipeline. Run `python3 rejoin_seats.py` once after cloning (or concatenate
+the parts in order) to reconstruct `seats.xlsx`; the script verifies the SHA-256. In the
+working folder the file is present whole. The redundant `pre0618/Photos-3-001.zip` is
+not carried in the repository; see `pre0618/README.md`.
+
 ## Authorship
 
 All modelling, documentation, data preparation, and code in this repository are the work
