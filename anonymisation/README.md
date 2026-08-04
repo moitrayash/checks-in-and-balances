@@ -33,24 +33,24 @@ master source of truth and every downstream artefact still uses it.
 | Cities (`dest_city`) | `City01` to `City63` |
 | Countries (`dest_country`, `airline_country`) | `Country01` to `Country46`, one shared map across both columns |
 | Flight numbers (`Flight Designator`) | Renumbered `01` upward inside each airline, so `Airline47 13` |
-| Dates (`SOBT`, `checkinopen`, `checkinclose`) | The literal placeholder `DD/MM/YYYY`, or `(DD-01)/MM/YYYY` and `(DD+01)/MM/YYYY` where the timestamp falls on an adjacent day |
 | `Public Terminal` | Column dropped. It read `Terminal 3` on all 164 rows and carried no variance. |
 
-Seats, clock times, traffic type, `S.no`, column order and row order are carried
-through untouched.
+Seats, traffic type, `S.no`, column order and row order are carried through
+untouched.
 
-The departure day is the reference and always reads plain `DD/MM/YYYY`. A
-timestamp on an adjacent day carries a signed, zero padded offset in brackets, so
-in this schedule 33 check-in windows open and 9 close at `(DD-01)/MM/YYYY`. The
-offset is kept because flattening every timestamp to a single `DD/MM/YYYY` would
-make a counter opening at 20:05 the previous evening indistinguishable from one
-opening at 20:05 on the day itself, and the FIFO wait engine orders on that
-distinction. The `(DD+01)` form is supported for schedules where a window runs
-past midnight into the following day; it does not occur in this one.
+## Dates are deliberately not anonymised
 
-The consequence is that these three columns are strings, not timestamps. Any
-downstream reader must parse the bracketed offset rather than hand the field to a
-date parser.
+`SOBT`, `checkinopen` and `checkinclose` carry their real values, byte-identical
+to the master. The operating day is 21 June 2026, and 33 check-in windows open
+and 9 close on the evening of 20 June. The three columns therefore remain
+ordinary timestamps that any date parser reads directly, and the FIFO wait engine
+needs no change.
+
+This is a deliberate narrowing of the anonymisation, not an oversight. The real
+date combined with this exact profile of 164 flights and 39,610 seats is
+matchable against published schedules by a determined reader, so the schedule is
+anonymised as to who, not as to when. Any release should say so plainly rather
+than imply a stronger guarantee than the data carries.
 
 ## How the map is drawn
 
@@ -105,8 +105,8 @@ shift the map.
 `seats_anonymised.csv` carries one row per occupiable seat, N = 39,610, and
 aliases only the three columns that name a real entity: `flight`, `route` and
 `dest`. `seat`, `n`, `dep`, `cap` and `seat_on_flight` are carried through
-untouched. No date appears in this file at all, since `dep` is a bare HHMM clock
-time, so the placeholder treatment applied to the schedule does not arise.
+untouched. `dep` is a bare HHMM clock time and no date column exists here at
+all.
 
 The file joins to `asimplied_anonymised.csv` exactly as `../seats.csv` joins to
 `../asimplied.csv`: the 164 flight aliases match, `route` agrees with `Routing`
@@ -115,13 +115,13 @@ both the schedule's `Seats` and the `cap` column.
 
 ## Verification performed
 
-Twenty-two checks pass on the seat universe and twenty-six on the schedule: row and seat totals preserved
+Twenty-two checks pass on the seat universe and eighteen on the schedule: row and seat totals preserved
 (164 and 39,610), the dropped column absent and all others in their original
 order, every alias family a strict one to one mapping, no alias colliding with
 any of the 7,884 live IATA codes, aliases spread across 25 distinct first
-letters, day offsets and clock times preserved on all 492 timestamps, and a leak
-test confirming that none of the 461 real identifier strings appears anywhere in
-the output. The JavaScript reimplementation reproduces all 403 aliases exactly. The seat universe is separately checked to join to the anonymised schedule on all 164 flights and to draw no alias of its own.
+letters, all three datetime columns byte-identical to the master, and a leak test
+confirming that none of the 459 real entity identifier strings appears anywhere
+in the output. The JavaScript reimplementation reproduces all 403 aliases exactly. The seat universe is separately checked to join to the anonymised schedule on all 164 flights and to draw no alias of its own.
 
 ## Note on the crosswalk
 

@@ -17,12 +17,10 @@ WHAT THIS DOES
         cities            City01 .. City63
         countries         Country01 .. Country46
         flight numbers    renumbered 01 .. 50 within each airline
-        dates             the literal placeholder DD/MM/YYYY, or (DD-01)/MM/YYYY
-                          and (DD+01)/MM/YYYY for a timestamp falling on the day
-                          before or after departure
         Public Terminal   column dropped (it was Terminal 3 on all 164 rows)
 
-    Seats, clock times, traffic type, column order and row order are unchanged.
+    Seats, all three datetime columns, traffic type, column order and row
+    order are unchanged.
 
 REPRODUCIBILITY
     Assignment is language independent. It uses only SHA-256, string sorting and
@@ -54,7 +52,6 @@ import hashlib
 import os
 import sys
 from collections import OrderedDict
-from datetime import datetime
 
 SEED = "20260621"
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -113,18 +110,6 @@ def assign_indexed(reals, family, template):
     )
 
 
-def placeholder_date(stamp, ref_date):
-    """'20-06-2026 20:05' relative to 21-06-2026 becomes '(DD-01)/MM/YYYY 20:05'.
-
-    Departure day is the reference. A timestamp on the departure day is plain
-    DD; one on an adjacent day carries a signed, zero padded offset in brackets,
-    so the check-in window can still be ordered against the departure without
-    disclosing the real date.
-    """
-    date_part, _, clock = stamp.partition(" ")
-    offset = (datetime.strptime(date_part, "%d-%m-%Y").date() - ref_date).days
-    day = "DD" if offset == 0 else f"(DD{'+' if offset > 0 else '-'}{abs(offset):02d})"
-    return f"{day}/MM/YYYY {clock}".rstrip()
 
 
 def load_master(path=None):
@@ -191,7 +176,6 @@ def main():
     out = []
     for r in rows:
         code = r["Airline code"].strip()
-        ref = datetime.strptime(r["SOBT"].split(" ")[0], "%d-%m-%Y").date()
         o = {k: v for k, v in r.items() if k not in DROP_COLUMNS}
         o["Airline code"] = airline_map[code]
         o["airline_name"] = airline_map[code]
@@ -202,8 +186,6 @@ def main():
         o["dest_city"] = city_map[r["dest_city"].strip()]
         o["dest_country"] = country_map[r["dest_country"].strip()]
         o["airline_country"] = country_map[r["airline_country"].strip()]
-        for col in ("SOBT", "checkinopen", "checkinclose"):
-            o[col] = placeholder_date(r[col], ref)
         out.append(o)
 
     with open(OUT, "w", newline="", encoding="utf-8") as fh:
