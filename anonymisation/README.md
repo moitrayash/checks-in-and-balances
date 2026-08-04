@@ -16,8 +16,10 @@ master source of truth and every downstream artefact still uses it.
 | File | What it is |
 |---|---|
 | `asimplied_anonymised.csv` | The anonymised duplicate of `../asimplied.csv`. 164 flights, 39,610 seats. |
+| `seats_anonymised.csv` | The anonymised duplicate of `../seats.csv`. One row per occupiable seat, N = 39,610. |
 | `anonymisation_crosswalk.csv` | The reverse map, real value to alias, 403 rows. Withhold from any public release. |
-| `anonymise_schedule.py` | The transform. Run it to regenerate both files from the master. |
+| `anonymise_schedule.py` | The schedule transform, and the single source of the alias map. Run it to regenerate the schedule and the crosswalk. |
+| `anonymise_seats.py` | The seat universe transform. Imports the map from `anonymise_schedule.py` rather than rebuilding it. |
 | `excluded_iata_codes.txt` | The 7,884 live IATA codes that an airport alias may not collide with. |
 | `verify_reproducibility.js` | An independent reimplementation in JavaScript, used to demonstrate that the map does not depend on the language it was built in. |
 
@@ -85,23 +87,41 @@ requires the crosswalk.
 ## Rebuilding
 
 ```
-python3 anonymise_schedule.py            # regenerates the CSV and the crosswalk
+python3 anonymise_schedule.py            # regenerates the schedule and the crosswalk
+python3 anonymise_seats.py               # regenerates the seat universe
 node verify_reproducibility.js           # prints the same map, independently derived
 ```
+
+Order does not matter. `anonymise_seats.py` calls `anonymise_schedule.build_maps`
+on the same master schedule rather than rebuilding a map of its own or reading
+the crosswalk, so the two outputs cannot drift apart.
 
 The script reads `excluded_iata_codes.txt` rather than querying an airport
 database at run time, so a future change in any upstream dataset cannot silently
 shift the map.
 
+## The seat universe
+
+`seats_anonymised.csv` carries one row per occupiable seat, N = 39,610, and
+aliases only the three columns that name a real entity: `flight`, `route` and
+`dest`. `seat`, `n`, `dep`, `cap` and `seat_on_flight` are carried through
+untouched. No date appears in this file at all, since `dep` is a bare HHMM clock
+time, so the placeholder treatment applied to the schedule does not arise.
+
+The file joins to `asimplied_anonymised.csv` exactly as `../seats.csv` joins to
+`../asimplied.csv`: the 164 flight aliases match, `route` agrees with `Routing`
+and `dest` with `dest_iata` on every flight, and the seat count per flight equals
+both the schedule's `Seats` and the `cap` column.
+
 ## Verification performed
 
-Twenty-six checks pass on the current output: row and seat totals preserved
+Twenty-two checks pass on the seat universe and twenty-six on the schedule: row and seat totals preserved
 (164 and 39,610), the dropped column absent and all others in their original
 order, every alias family a strict one to one mapping, no alias colliding with
 any of the 7,884 live IATA codes, aliases spread across 25 distinct first
-letters, day offsets and clock times preserved on all 492 timestamps in the DD/MM/YYYY form, and a leak
+letters, day offsets and clock times preserved on all 492 timestamps, and a leak
 test confirming that none of the 461 real identifier strings appears anywhere in
-the output. The JavaScript reimplementation reproduces all 403 aliases exactly.
+the output. The JavaScript reimplementation reproduces all 403 aliases exactly. The seat universe is separately checked to join to the anonymised schedule on all 164 flights and to draw no alias of its own.
 
 ## Note on the crosswalk
 

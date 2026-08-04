@@ -127,24 +127,24 @@ def placeholder_date(stamp, ref_date):
     return f"{day}/MM/YYYY {clock}".rstrip()
 
 
-def main():
-    with open(SRC, newline="", encoding="utf-8-sig") as fh:
-        rows = list(csv.DictReader(fh))
-    fields = [c for c in rows[0].keys() if c not in DROP_COLUMNS]
+def load_master(path=None):
+    with open(path or SRC, newline="", encoding="utf-8-sig") as fh:
+        return list(csv.DictReader(fh))
 
+
+def build_maps(rows):
+    """Every alias map, derived from the master schedule alone.
+
+    This is the single source of the alias assignment. anonymise_seats.py
+    imports it rather than rebuilding its own, so the seat universe and the
+    schedule can never drift out of agreement.
+    """
     airports = set()
     for r in rows:
         airports |= {s.strip() for s in r["Routing"].split("-")}
         airports.add(r["dest_iata"].strip())
 
-    excluded = load_excluded()
-    airport_map = assign_airports(airports, excluded)
     airline_map = assign_indexed({r["Airline code"].strip() for r in rows}, "airline", "Airline{:02d}")
-    gha_map = assign_indexed({r["GHA"].strip() for r in rows}, "gha", "GHA{:02d}")
-    city_map = assign_indexed({r["dest_city"].strip() for r in rows}, "city", "City{:02d}")
-    country_map = assign_indexed(
-        {r["dest_country"].strip() for r in rows} | {r["airline_country"].strip() for r in rows},
-        "country", "Country{:02d}")
 
     # flight numbers, renumbered inside each airline, same canonical ordering
     by_airline = {}
@@ -155,10 +155,38 @@ def main():
         for n, real in enumerate(canonical_order(by_airline[code], "flight"), start=1):
             designator_map[real] = f"{airline_map[code]} {n:02d}"
 
-    hub = max(airports, key=lambda a: sum(a in r["Routing"] for r in rows))
     code_to_name = {}
     for r in rows:
         code_to_name.setdefault(r["Airline code"].strip(), r["airline_name"].strip())
+
+    return {
+        "airport": assign_airports(airports, load_excluded()),
+        "airline": airline_map,
+        "gha": assign_indexed({r["GHA"].strip() for r in rows}, "gha", "GHA{:02d}"),
+        "city": assign_indexed({r["dest_city"].strip() for r in rows}, "city", "City{:02d}"),
+        "country": assign_indexed(
+            {r["dest_country"].strip() for r in rows} | {r["airline_country"].strip() for r in rows},
+            "country", "Country{:02d}"),
+        "designator": designator_map,
+        "hub": max(airports, key=lambda a: sum(a in r["Routing"] for r in rows)),
+        "code_to_name": code_to_name,
+    }
+
+
+def alias_route(routing, airport_map):
+    """'DEL-CCU-SFO' becomes 'VMT-ABC-XYZ', segment by segment."""
+    return "-".join(airport_map[s.strip()] for s in routing.split("-"))
+
+
+def main():
+    rows = load_master()
+    fields = [c for c in rows[0].keys() if c not in DROP_COLUMNS]
+
+    m = build_maps(rows)
+    airport_map, airline_map = m["airport"], m["airline"]
+    gha_map, city_map, country_map = m["gha"], m["city"], m["country"]
+    designator_map, hub, code_to_name = m["designator"], m["hub"], m["code_to_name"]
+    excluded = load_excluded()
 
     out = []
     for r in rows:
@@ -168,7 +196,7 @@ def main():
         o["Airline code"] = airline_map[code]
         o["airline_name"] = airline_map[code]
         o["Flight Designator"] = designator_map[r["Flight Designator"].strip()]
-        o["Routing"] = "-".join(airport_map[s.strip()] for s in r["Routing"].split("-"))
+        o["Routing"] = alias_route(r["Routing"], airport_map)
         o["GHA"] = gha_map[r["GHA"].strip()]
         o["dest_iata"] = airport_map[r["dest_iata"].strip()]
         o["dest_city"] = city_map[r["dest_city"].strip()]
