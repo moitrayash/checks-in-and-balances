@@ -31,17 +31,24 @@ master source of truth and every downstream artefact still uses it.
 | Cities (`dest_city`) | `City01` to `City63` |
 | Countries (`dest_country`, `airline_country`) | `Country01` to `Country46`, one shared map across both columns |
 | Flight numbers (`Flight Designator`) | Renumbered `01` upward inside each airline, so `Airline47 13` |
-| Dates (`SOBT`, `checkinopen`, `checkinclose`) | The literal placeholder `DD-MM-YYYY`, or `DD-1-MM-YYYY` where the timestamp falls on the day before departure |
+| Dates (`SOBT`, `checkinopen`, `checkinclose`) | The literal placeholder `DD/MM/YYYY`, or `(DD-01)/MM/YYYY` and `(DD+01)/MM/YYYY` where the timestamp falls on an adjacent day |
 | `Public Terminal` | Column dropped. It read `Terminal 3` on all 164 rows and carried no variance. |
 
 Seats, clock times, traffic type, `S.no`, column order and row order are carried
 through untouched.
 
-The date placeholder keeps its day offset because 33 check-in windows open, and 9
-close, on the evening before departure. Flattening every timestamp to a single
-`DD-MM-YYYY` would make a counter opening at 20:05 the previous evening
-indistinguishable from one opening at 20:05 on the day itself, and the FIFO wait
-engine orders on that distinction.
+The departure day is the reference and always reads plain `DD/MM/YYYY`. A
+timestamp on an adjacent day carries a signed, zero padded offset in brackets, so
+in this schedule 33 check-in windows open and 9 close at `(DD-01)/MM/YYYY`. The
+offset is kept because flattening every timestamp to a single `DD/MM/YYYY` would
+make a counter opening at 20:05 the previous evening indistinguishable from one
+opening at 20:05 on the day itself, and the FIFO wait engine orders on that
+distinction. The `(DD+01)` form is supported for schedules where a window runs
+past midnight into the following day; it does not occur in this one.
+
+The consequence is that these three columns are strings, not timestamps. Any
+downstream reader must parse the bracketed offset rather than hand the field to a
+date parser.
 
 ## How the map is drawn
 
@@ -92,7 +99,7 @@ Twenty-six checks pass on the current output: row and seat totals preserved
 (164 and 39,610), the dropped column absent and all others in their original
 order, every alias family a strict one to one mapping, no alias colliding with
 any of the 7,884 live IATA codes, aliases spread across 25 distinct first
-letters, day offsets and clock times preserved on all 492 timestamps, and a leak
+letters, day offsets and clock times preserved on all 492 timestamps in the DD/MM/YYYY form, and a leak
 test confirming that none of the 461 real identifier strings appears anywhere in
 the output. The JavaScript reimplementation reproduces all 403 aliases exactly.
 

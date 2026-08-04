@@ -17,8 +17,9 @@ WHAT THIS DOES
         cities            City01 .. City63
         countries         Country01 .. Country46
         flight numbers    renumbered 01 .. 50 within each airline
-        dates             the literal placeholder DD-MM-YYYY, or DD-1-MM-YYYY
-                          for a timestamp falling on the day before departure
+        dates             the literal placeholder DD/MM/YYYY, or (DD-01)/MM/YYYY
+                          and (DD+01)/MM/YYYY for a timestamp falling on the day
+                          before or after departure
         Public Terminal   column dropped (it was Terminal 3 on all 164 rows)
 
     Seats, clock times, traffic type, column order and row order are unchanged.
@@ -113,11 +114,17 @@ def assign_indexed(reals, family, template):
 
 
 def placeholder_date(stamp, ref_date):
-    """'20-06-2026 20:05' relative to 21-06-2026 becomes 'DD-1-MM-YYYY 20:05'."""
+    """'20-06-2026 20:05' relative to 21-06-2026 becomes '(DD-01)/MM/YYYY 20:05'.
+
+    Departure day is the reference. A timestamp on the departure day is plain
+    DD; one on an adjacent day carries a signed, zero padded offset in brackets,
+    so the check-in window can still be ordered against the departure without
+    disclosing the real date.
+    """
     date_part, _, clock = stamp.partition(" ")
     offset = (datetime.strptime(date_part, "%d-%m-%Y").date() - ref_date).days
-    day = "DD" if offset == 0 else f"DD{offset:+d}".replace("+", "+")
-    return f"{day}-MM-YYYY {clock}".rstrip()
+    day = "DD" if offset == 0 else f"(DD{'+' if offset > 0 else '-'}{abs(offset):02d})"
+    return f"{day}/MM/YYYY {clock}".rstrip()
 
 
 def main():
