@@ -32,7 +32,7 @@ master source of truth and every downstream artefact still uses it.
 | Ground handlers (`GHA`) | `GHA01` to `GHA04` |
 | Cities (`dest_city`) | `City01` to `City63` |
 | Countries (`dest_country`, `airline_country`) | `Country01` to `Country46`, one shared map across both columns |
-| Flight numbers (`Flight Designator`) | Renumbered `01` upward inside each airline, so `Airline47 13` |
+| Flight numbers (`Flight Designator`) | Renumbered from `101` upward inside each airline, always three digits and never a leading zero, so `Airline37 118` |
 | `Public Terminal` | Column dropped. It read `Terminal 3` on all 164 rows and carried no variance. |
 
 Seats, traffic type, `S.no`, column order and row order are carried through
@@ -119,9 +119,21 @@ Twenty-two checks pass on the seat universe and eighteen on the schedule: row an
 (164 and 39,610), the dropped column absent and all others in their original
 order, every alias family a strict one to one mapping, no alias colliding with
 any of the 7,884 live IATA codes, aliases spread across 25 distinct first
-letters, all three datetime columns byte-identical to the master, and a leak test
+letters, every designator number three digits with no leading zero and no flight
+carrying its own real number, all three datetime columns byte-identical to the
+master, and a leak test
 confirming that none of the 459 real entity identifier strings appears anywhere
 in the output. The JavaScript reimplementation reproduces all 403 aliases exactly. The seat universe is separately checked to join to the anonymised schedule on all 164 flights and to draw no alias of its own.
+
+## A note on flight numbers
+
+Numbers run `101` upward within each airline, so the busiest carrier occupies
+`101` to `150`. Ten of those values coincide with a real flight number appearing
+somewhere else in the source schedule. This is a coincidence of value and never
+of identity: no flight carries its own real number, and knowing that an alias
+`131` exists says nothing about the real flight that bore `131`, which maps
+elsewhere. The count of flights per airline is preserved and is visible in the
+highest number each airline reaches.
 
 ## Note on the crosswalk
 

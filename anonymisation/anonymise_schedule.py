@@ -16,7 +16,8 @@ WHAT THIS DOES
         ground handlers   GHA01 .. GHA04
         cities            City01 .. City63
         countries         Country01 .. Country46
-        flight numbers    renumbered 01 .. 50 within each airline
+        flight numbers    renumbered from 101 upward within each airline, so
+                          always three digits and never a leading zero
         Public Terminal   column dropped (it was Terminal 3 on all 164 rows)
 
     Seats, all three datetime columns, traffic type, column order and row
@@ -138,7 +139,7 @@ def build_maps(rows):
     designator_map = {}
     for code in sorted(by_airline):
         for n, real in enumerate(canonical_order(by_airline[code], "flight"), start=1):
-            designator_map[real] = f"{airline_map[code]} {n:02d}"
+            designator_map[real] = f"{airline_map[code]} {100 + n}"
 
     code_to_name = {}
     for r in rows:
